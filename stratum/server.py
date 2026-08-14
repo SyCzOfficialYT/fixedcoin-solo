@@ -14,27 +14,42 @@ def adapt(t: str) -> str:
     t = t.replace(" FCH", " FIX")
     t = t.replace("FreeCash", "FixedCoin")
     t = t.replace("/FCH-Solo/", "/FIX-Solo/")
-    t = re.sub(r"^DEV_ADDRESS\s*=\s*.*\n", "", t, flags=re.M)
-    t = "\n".join(l for l in t.splitlines() if "DEV_ADDRESS" not in l) + "\n"
+    t = re.sub(r"^DEV_ADDRESS\s*=.*\n", "", t, flags=re.M)
+    t = "\n".join(ln for ln in t.splitlines() if "DEV_ADDRESS" not in ln) + "\n"
     t = re.sub(r"^\s*self\.dev_spk\s*=.*\n", "", t, flags=re.M)
     t = t.replace(", self.dev_spk", "")
+
+    start = t.find("def build_coinbase_parts(")
+    if start < 0:
+        raise RuntimeError("build_coinbase_parts not found")
+    rest = t[start:]
+    m = re.search(r"\ndef [a-zA-Z_]", rest[1:])
+    if not m:
+        raise RuntimeError("end of build_coinbase_parts not found")
+    end = start + 1 + m.start()
     single = (
         "def build_coinbase_parts(height, miner_value_sats, miner_spk, en1_size=4, en2_size=4, *args, **kwargs):\n"
-        "    tag = b\"/FIX-Solo/\"\n"
+        "    tag = b'/FIX-Solo/'\n"
         "    height_script = bip34_height(height)\n"
         "    scriptsig_len = len(height_script) + en1_size + en2_size + len(tag)\n"
-        "    part1 = struct.pack(\"<I\", 2) + b\"\\x01\" + b\"\\x00\" * 32 + struct.pack(\"<I\", 0xFFFFFFFF)\n"
+        "    part1 = struct.pack('<I', 2) + bytes([1]) + bytes(32) + struct.pack('<I', 0xFFFFFFFF)\n"
         "    part1 += encode_varint(scriptsig_len) + height_script\n"
-        "    part2 = tag + struct.pack(\"<I\", 0xFFFFFFFF) + b\"\\x01\"\n"
-        "    part2 += struct.pack(\"<Q\", int(miner_value_sats))\n"
+        "    part2 = tag + struct.pack('<I', 0xFFFFFFFF) + bytes([1])\n"
+        "    part2 += struct.pack('<Q', int(miner_value_sats))\n"
         "    part2 += encode_varint(len(miner_spk)) + miner_spk\n"
-        "    part2 += struct.pack(\"<I\", 0)\n"
+        "    part2 += struct.pack('<I', 0)\n"
         "    return binascii.hexlify(part1).decode(), binascii.hexlify(part2).decode()\n\n"
     )
-    t = re.sub(r"def build_coinbase_parts\(.*?
-(?=def )", single, t, count=1, flags=re.S)
+    t = t[:start] + single + t[end:]
+
     a = "if job is not None and clean:\n                broadcast_job(clean=True)"
-    b = "if job is not None:\n                if clean:\n                    broadcast_job(clean=True)\n                else:\n                    broadcast_job(clean=False)"
+    b = (
+        "if job is not None:\n"
+        "                if clean:\n"
+        "                    broadcast_job(clean=True)\n"
+        "                else:\n"
+        "                    broadcast_job(clean=False)"
+    )
     if a in t:
         t = t.replace(a, b, 1)
     return t
