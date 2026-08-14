@@ -1,0 +1,20 @@
+services:
+  fixedcoin-solo:
+    build: .
+    container_name: fixedcoin-solo
+    restart: unless-stopped
+    ports:
+      - "3333:3333"
+      - "5050:5050"
+      - "24768:24768"
+    volumes:
+      - fix-data:/data
+      - ./config/config.yaml:/app/config/config.yaml:ro
+    environment:
+      - STATS_PATH=/data/stats.json
+      - EVENTS_PATH=/data/events.jsonl
+      - FIX_DATADIR=/data/fixedcoin
+    shm_size: "1gb"
+
+volumes:
+  fix-data:
