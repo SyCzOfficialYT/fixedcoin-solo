@@ -10,7 +10,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 FULL = HERE / "server_full.py"
 URL = "https://raw.githubusercontent.com/SyCzOfficialYT/freecash-coin/a88d89675b3a41cc6774e1b975e57e050d4892cc/stratum/server.py"
-ADAPT_VERSION = "fixedcoin-fch-dashboard-repair-2026-08-14-v6-gbt-safe"
+ADAPT_VERSION = "fixedcoin-fch-dashboard-repair-2026-08-14-v7-gbt-segwit"
 
 
 def replace_function(source: str, name: str, replacement: str) -> str:
@@ -32,11 +32,16 @@ def adapt(t: str) -> str:
     t = t.replace("FreeCash", "FixedCoin")
     t = t.replace("/FCH-Solo/", "/FIX-Solo/")
 
-    # Keep the known-good FreeCash GBT request. FixedCoin's daemon currently
-    # rejects an explicit ["segwit"] request with HTTP 500. If the template
-    # contains default_witness_commitment, witness handling is data-driven.
-    if 'rpc("getblocktemplate", [{"rules": []}]) or rpc("getblocktemplate", [])' not in t:
+    # FixedCoin Core requires BIP145/SegWit negotiation for getblocktemplate.
+    # The previous adapter called GBT with an empty rules array, which made
+    # FixedCoin return HTTP 500 / RPC -8 on every template refresh.
+    old_gbt = 'rpc("getblocktemplate", [{"rules": []}]) or rpc("getblocktemplate", [])'
+    new_gbt = 'rpc("getblocktemplate", [{"rules": ["segwit"]}])'
+    if old_gbt not in t:
         raise RuntimeError("known-good getblocktemplate call missing")
+    t = t.replace(old_gbt, new_gbt, 1)
+    if new_gbt not in t:
+        raise RuntimeError("FixedCoin SegWit getblocktemplate call missing after adaptation")
 
     fixed_marker = 'MAX_DIFF = int(cfg["pool"].get("vardiff_max", 50_000_000))'
     if fixed_marker not in t:
@@ -110,7 +115,7 @@ def adapt(t: str) -> str:
         t = t.replace(old_call, new_call, 1)
     t = t.replace(
         'build_coinbase_parts(job["height"], job["value"], job["spk"], job["dev_spk"]',
-        'build_coinbase_parts(job["height"], job["value"], job["spk"], job.get("dev_spk")',
+        'build_coinbase_parts(job["height"], job["value"], job.get("spk"), job.get("dev_spk")',
     )
 
     witness_helper = '''def coinbase_add_witness(tx_nowitness: bytes, enabled: bool) -> bytes:
@@ -158,6 +163,8 @@ def generate_server() -> None:
     assert "FIXED_DIFF" in adapted
     assert "witness_commitment" in adapted
     assert "coinbase_add_witness" in adapted
+    assert 'rpc("getblocktemplate", [{"rules": ["segwit"]}])' in adapted
+    assert 'rpc("getblocktemplate", [{"rules": []}])' not in adapted
     FULL.write_text(f"# ADAPT_VERSION={ADAPT_VERSION}\n" + adapted)
     print("Wrote", FULL, FULL.stat().st_size, flush=True)
 
