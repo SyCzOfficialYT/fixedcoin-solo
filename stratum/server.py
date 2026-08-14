@@ -14,10 +14,6 @@ def adapt(t: str) -> str:
     t = t.replace(" FCH", " FIX")
     t = t.replace("FreeCash", "FixedCoin")
     t = t.replace("/FCH-Solo/", "/FIX-Solo/")
-    t = "\n".join(
-        ln for ln in t.splitlines()
-        if "DEV_ADDRESS" not in ln and "self.dev_spk" not in ln and "dev_spk" not in ln
-    ) + "\n"
 
     start = t.find("def build_coinbase_parts(")
     if start < 0:
@@ -41,6 +37,11 @@ def adapt(t: str) -> str:
         "    return binascii.hexlify(part1).decode(), binascii.hexlify(part2).decode()\n\n"
     )
     t = t[:start] + single + t[end:]
+
+    t = "\n".join(
+        ln for ln in t.splitlines()
+        if "DEV_ADDRESS" not in ln and "dev_spk" not in ln
+    ) + "\n"
 
     a = "if job is not None and clean:\n                broadcast_job(clean=True)"
     b = (

@@ -25,12 +25,7 @@ t = t.replace(" FCH", " FIX")
 t = t.replace("FreeCash", "FixedCoin")
 t = t.replace("/FCH-Solo/", "/FIX-Solo/")
 
-# Drop every line that mentions DEV_ADDRESS or self.dev_spk
-t = "\n".join(
-    ln for ln in t.splitlines()
-    if "DEV_ADDRESS" not in ln and "self.dev_spk" not in ln and "dev_spk" not in ln
-) + "\n"
-
+# 1) Replace coinbase WHILE original def still present
 start = t.find("def build_coinbase_parts(")
 if start < 0:
     raise SystemExit("build_coinbase_parts not found")
@@ -39,7 +34,6 @@ m = re.search(r"\ndef [a-zA-Z_]", rest[1:])
 if not m:
     raise SystemExit("end of build_coinbase_parts not found")
 end = start + 1 + m.start()
-
 single = (
     "def build_coinbase_parts(height, miner_value_sats, miner_spk, en1_size=4, en2_size=4, *args, **kwargs):\n"
     "    tag = b'/FIX-Solo/'\n"
@@ -54,6 +48,12 @@ single = (
     "    return binascii.hexlify(part1).decode(), binascii.hexlify(part2).decode()\n\n"
 )
 t = t[:start] + single + t[end:]
+
+# 2) Drop DEV / dual-output leftovers
+t = "\n".join(
+    ln for ln in t.splitlines()
+    if "DEV_ADDRESS" not in ln and "dev_spk" not in ln
+) + "\n"
 
 a = "if job is not None and clean:\n                broadcast_job(clean=True)"
 b = (
