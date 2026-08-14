@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
-"""Bootstrap: build FIX stratum into server_full.py then run it."""
-import ast, re, runpy, sys, urllib.request
+"""Bootstrap the adapted FixedCoin stratum and run the cached generated server."""
+import ast
+import os
+import re
+import runpy
+import sys
+import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -20,7 +25,7 @@ def adapt(t: str) -> str:
     new_gbt = 'rpc("getblocktemplate", [{"rules": ["segwit"]}])'
     if old_gbt not in t:
         raise RuntimeError("getblocktemplate pattern missing")
-    t = t.replace(old_gbt, new_gbt)
+    t = t.replace(old_gbt, new_gbt, 1)
 
     fixed_marker = 'MAX_DIFF = int(cfg["pool"].get("vardiff_max", 50_000_000))'
     if fixed_marker not in t:
@@ -41,7 +46,7 @@ def adapt(t: str) -> str:
     end_fixed = start_fixed + 1 + m_fixed.start()
     fixed_parser = (
         "def parse_fixed_diff(*candidates):\n"
-        "    \"\"\"Detect an explicit d=/diff= password and return the pool fixed diff.\"\"\"\n"
+        "    \"\"\"Enable fixed difficulty when a miner explicitly supplies d=/diff=.\"\"\"\n"
         "    for raw in candidates:\n"
         "        if not raw or not isinstance(raw, str):\n"
         "            continue\n"
@@ -92,16 +97,27 @@ def adapt(t: str) -> str:
     return t
 
 
-if FULL.exists():
-    FULL.unlink()
-print("Fetching stratum base…")
-raw = urllib.request.urlopen(URL, timeout=60).read().decode()
-adapted = adapt(raw)
-ast.parse(adapted)
-assert "DEV_ADDRESS" not in adapted and "dev_spk" not in adapted
-assert '"segwit"' in adapted
-assert "FIXED_DIFF" in adapted
-FULL.write_text(adapted)
-print("Wrote", FULL, FULL.stat().st_size)
+def generate_server() -> None:
+    print("Fetching stratum base…", flush=True)
+    raw = urllib.request.urlopen(URL, timeout=60).read().decode()
+    adapted = adapt(raw)
+    ast.parse(adapted)
+    assert "DEV_ADDRESS" not in adapted and "dev_spk" not in adapted
+    assert '"segwit"' in adapted
+    assert "FIXED_DIFF" in adapted
+    FULL.write_text(adapted)
+    print("Wrote", FULL, FULL.stat().st_size, flush=True)
+
+
+# Docker image builds call this once. Runtime NEVER needs the GitHub/raw URL.
+if os.environ.get("STRATUM_BUILD_ONLY") == "1":
+    generate_server()
+    raise SystemExit(0)
+
+# Keep the generated server. The old implementation deleted it on every start,
+# forcing a network fetch and making the container look hung when GitHub was slow.
+if not FULL.exists() or FULL.stat().st_size < 1000:
+    generate_server()
+
 sys.argv[0] = str(FULL)
 runpy.run_path(str(FULL), run_name="__main__")
