@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """Verify FixedCoin RPC availability and basic chain integrity.
 
+Run normally from the host with::
+
+    python3 tools/verify_chain_rpc.py
+
+If the FixedCoin node is running in the project's Docker container and the
+host cannot reach its private RPC listener, the verifier automatically runs
+itself inside ``fixedcoin-solo``. Set ``FIX_RPC_NO_DOCKER=1`` to disable that
+fallback and force a direct RPC connection.
+
 Checks:
 - JSON-RPC authentication works
 - getblockchaininfo is coherent
@@ -12,37 +21,96 @@ Checks:
 This intentionally does not require the chain to advance while the test runs;
 a node may legitimately have no new blocks during a short verification window.
 """
-import os
-import sys
-from urllib.request import Request, urlopen
-from urllib.error import URLError, HTTPError
+
 import base64
 import json
+import os
+import shutil
+import subprocess
+import sys
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 HOST = os.getenv("FIX_RPC_HOST", "127.0.0.1")
 PORT = int(os.getenv("FIX_RPC_PORT", "24761"))
 USER = os.getenv("FIX_RPCUSER", "fixrpc")
 PASSWORD = os.getenv("FIX_RPCPASS", "FixedcoinSoloAutoRpc_ChangeMeIfPublic")
+CONTAINER = os.getenv("FIX_RPC_CONTAINER", "fixedcoin-solo")
 URL = f"http://{HOST}:{PORT}"
 
 
 def rpc(method, params=None):
-    payload = json.dumps({"jsonrpc": "1.0", "id": "verify", "method": method, "params": params or []}).encode()
+    payload = json.dumps(
+        {"jsonrpc": "1.0", "id": "verify", "method": method, "params": params or []}
+    ).encode()
     req = Request(URL, data=payload, headers={"Content-Type": "application/json"})
     token = base64.b64encode(f"{USER}:{PASSWORD}".encode()).decode()
     req.add_header("Authorization", f"Basic {token}")
     try:
-        with urlopen(req, timeout=10) as r:
-            data = json.load(r)
-    except (HTTPError, URLError, OSError) as e:
-        raise RuntimeError(f"RPC transport failed: {e}") from e
+        with urlopen(req, timeout=10) as response:
+            data = json.load(response)
+    except (HTTPError, URLError, OSError) as exc:
+        raise RuntimeError(f"RPC transport failed: {exc}") from exc
     if data.get("error"):
         raise RuntimeError(f"RPC {method} failed: {data['error']}")
     return data.get("result")
 
 
+def _docker_fallback():
+    """Run the verifier inside the all-in-one container when host RPC is private."""
+    if os.getenv("FIX_RPC_NO_DOCKER") == "1":
+        return False
+    if os.getenv("FIX_RPC_IN_CONTAINER") == "1":
+        return False
+    docker = shutil.which("docker")
+    if not docker:
+        return False
+
+    try:
+        state = subprocess.run(
+            [docker, "inspect", "-f", "{{.State.Running}}", CONTAINER],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+    if state.returncode != 0 or state.stdout.strip().lower() != "true":
+        return False
+
+    print(f"[verify] host RPC {URL} is unreachable; retrying inside Docker container {CONTAINER}")
+    env = {
+        "FIX_RPC_HOST": "127.0.0.1",
+        "FIX_RPC_PORT": str(PORT),
+        "FIX_RPCUSER": USER,
+        "FIX_RPCPASS": PASSWORD,
+        "FIX_RPC_IN_CONTAINER": "1",
+    }
+    cmd = [docker, "exec"]
+    for key, value in env.items():
+        cmd.extend(["-e", f"{key}={value}"])
+    cmd.extend([CONTAINER, "python3", "/app/tools/verify_chain_rpc.py"])
+
+    result = subprocess.run(cmd, check=False)
+    return result.returncode == 0
+
+
 def main():
     print(f"[verify] RPC endpoint: {URL}")
+    try:
+        return verify_rpc()
+    except RuntimeError as exc:
+        # The compose setup intentionally keeps RPC private to the all-in-one
+        # container. A host-side invocation therefore cannot reach 127.0.0.1:
+        # 24761. Automatically run the exact same verifier inside the container.
+        if _docker_fallback():
+            return 0
+        raise exc
+
+
+def verify_rpc():
     info = rpc("getblockchaininfo")
     height = int(info.get("blocks", -1))
     headers = int(info.get("headers", -1))
@@ -63,8 +131,6 @@ def main():
         raise RuntimeError("tip block is inconsistent")
     print(f"[verify] tip OK: #{height} {tip_hash}")
 
-    # Verify the most recent chain links. This catches a node whose RPC responds
-    # but whose block index/prev-hash chain is malformed.
     checks = min(25, height)
     child = tip
     for h in range(height - 1, max(-1, height - checks - 1), -1):
@@ -83,8 +149,6 @@ def main():
     try:
         template = rpc("getblocktemplate", [{}])
     except RuntimeError:
-        # Some Bitcoin-derived nodes expect no params or a different template
-        # rule set. Retry the plain call before declaring the RPC path broken.
         template = rpc("getblocktemplate")
     if not isinstance(template, dict) or not template.get("height"):
         raise RuntimeError("getblocktemplate returned no usable template")
@@ -97,6 +161,6 @@ def main():
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except Exception as e:
-        print(f"[verify] FAIL: {e}", file=sys.stderr)
+    except Exception as exc:
+        print(f"[verify] FAIL: {exc}", file=sys.stderr)
         raise SystemExit(1)
