@@ -96,7 +96,7 @@ run_forever() {
   done
 }
 
-run_forever dashboard /app/data/dashboard.log python3 /app/monitor/app.py &
+run_forever dashboard /app/data/dashboard.log python3 /app/monitor/app_fixed.py &
 DASH_SUPERVISOR_PID=$!
 
 echo "[allinone] dashboard supervisor started on :${DASH_PORT}"
