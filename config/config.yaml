@@ -8,6 +8,7 @@ rpc:
 pool:
   payout_address: "fix1qYOUR_BECH32_ADDRESS_HERE"
   start_difficulty: 10000
+  fixed_difficulty: 13354
   min_difficulty: 1000
   job_interval: 30
   stratum_host: "0.0.0.0"
