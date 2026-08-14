@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline regression test for the dashboard's wallet-authoritative coinbase tracking."""
+"""Regression test for wallet-authoritative FixedCoin coinbase tracking."""
 from __future__ import annotations
 
 import sys
@@ -59,7 +59,16 @@ def main() -> None:
     assert rows[0]["category"] == "immature"
     assert rows[1]["category"] == "generate"
     assert all(r["address"] == expected for r in rows)
-    print("PASS: wallet coinbase tracking handles immature -> generate and filters payout address")
+
+    immature = app_fixed.base.maturity_info(1000, rows)[0]
+    assert immature["left"] == 100
+    assert immature["spendable"] is False
+
+    mature = app_fixed.base.maturity_info(1100, rows)[0]
+    assert mature["left"] == 0
+    assert mature["spendable"] is True
+
+    print("PASS: wallet coinbase flow filters payout, shows immature, then becomes spendable at maturity")
 
 
 if __name__ == "__main__":
