@@ -36,69 +36,32 @@ from pathlib import Path
 p = Path("/app/config/config.yaml")
 cfg = {}
 if p.exists():
-    try:
-        cfg = yaml.safe_load(p.read_text()) or {}
-    except Exception:
-        cfg = {}
+    try: cfg = yaml.safe_load(p.read_text()) or {}
+    except Exception: cfg = {}
 cfg.setdefault("rpc", {})
-cfg["rpc"].update({
-    "host": "127.0.0.1",
-    "port": int(os.environ.get("FIX_RPCPORT", "24761")),
-    "user": os.environ.get("FIX_RPCUSER", "fixrpc"),
-    "password": os.environ.get("FIX_RPCPASS", "FixedcoinSoloAutoRpc_ChangeMeIfPublic"),
-    "timeout": 30,
-})
+cfg["rpc"].update({"host":"127.0.0.1","port":int(os.environ.get("FIX_RPCPORT","24761")),"user":os.environ.get("FIX_RPCUSER","fixrpc"),"password":os.environ.get("FIX_RPCPASS","FixedcoinSoloAutoRpc_ChangeMeIfPublic"),"timeout":30})
 cfg.setdefault("pool", {})
 payout = os.environ.get("FIX_PAYOUT_ADDRESS", "").strip()
-if payout:
-    cfg["pool"]["payout_address"] = payout
-else:
-    cfg["pool"].setdefault("payout_address", "fix1CHANGE_ME_GETNEWADDRESS")
-cfg["pool"]["stratum_port"] = int(cfg["pool"].get("stratum_port", 3333))
-cfg["pool"]["stratum_host"] = cfg["pool"].get("stratum_host", "0.0.0.0")
-cfg["pool"]["start_difficulty"] = int(cfg["pool"].get("start_difficulty", 10000))
-cfg["pool"]["fixed_difficulty"] = int(cfg["pool"].get("fixed_difficulty", 13354))
-cfg["pool"]["min_difficulty"] = int(cfg["pool"].get("min_difficulty", 1000))
-cfg["pool"]["job_interval"] = int(cfg["pool"].get("job_interval", 30))
-cfg["monitor"] = {"host": "0.0.0.0", "port": int(os.environ.get("FIX_DASH_PORT", "5050"))}
-cfg.setdefault("logging", {"level": "INFO"})
-p.write_text(yaml.safe_dump(cfg, default_flow_style=False, sort_keys=False))
-print("[allinone] config.yaml ready, payout", cfg["pool"].get("payout_address"), "monitor", cfg["monitor"]["port"])
+if payout: cfg["pool"]["payout_address"] = payout
+else: cfg["pool"].setdefault("payout_address", "fix1CHANGE_ME_GETNEWADDRESS")
+cfg["pool"]["stratum_port"] = int(cfg["pool"].get("stratum_port",3333)); cfg["pool"]["stratum_host"] = cfg["pool"].get("stratum_host","0.0.0.0"); cfg["pool"]["start_difficulty"] = int(cfg["pool"].get("start_difficulty",10000)); cfg["pool"]["fixed_difficulty"] = int(cfg["pool"].get("fixed_difficulty",13354)); cfg["pool"]["min_difficulty"] = int(cfg["pool"].get("min_difficulty",1000)); cfg["pool"]["job_interval"] = int(cfg["pool"].get("job_interval",30)); cfg["monitor"]={"host":"0.0.0.0","port":int(os.environ.get("FIX_DASH_PORT","5050"))}; cfg.setdefault("logging",{"level":"INFO"}); p.write_text(yaml.safe_dump(cfg,default_flow_style=False,sort_keys=False)); print("[allinone] config.yaml ready, payout",cfg["pool"].get("payout_address"),"monitor",cfg["monitor"]["port"])
 PY
 
-if [ -x /usr/local/bin/fixedcoin-cli ] && [ ! -f /usr/local/bin/fixedcoin-cli.real ]; then
-  mv /usr/local/bin/fixedcoin-cli /usr/local/bin/fixedcoin-cli.real
-fi
+if [ -x /usr/local/bin/fixedcoin-cli ] && [ ! -f /usr/local/bin/fixedcoin-cli.real ]; then mv /usr/local/bin/fixedcoin-cli /usr/local/bin/fixedcoin-cli.real; fi
 cat > /usr/local/bin/fixedcoin-cli << EOF
 #!/bin/bash
 exec /usr/local/bin/fixedcoin-cli.real -datadir="$DATADIR" -rpcuser="$RPCUSER" -rpcpassword="$RPCPASS" "\$@"
 EOF
 chmod +x /usr/local/bin/fixedcoin-cli
 export PATH="/usr/local/bin:$PATH"
-
 touch /data/events.jsonl /data/stats.json /app/data/events.jsonl /app/data/stratum.log /app/data/dashboard.log 2>/dev/null || true
 
-# Dashboard is independent of chain sync. Start it immediately after config
-generation so the UI is reachable even while fixedcoind is still syncing.
-run_forever() {
-  local name="$1"
-  local logfile="$2"
-  shift 2
-  while true; do
-    echo "[allinone] start $name: $*"
-    "$@" >>"$logfile" 2>&1 &
-    local pid=$!
-    echo $pid >"/tmp/${name}.pid"
-    wait $pid
-    local rc=$?
-    echo "[allinone] $name exited rc=$rc – restart in 3s"
-    sleep 3
-  done
-}
+run_forever() { local name="$1"; local logfile="$2"; shift 2; while true; do echo "[allinone] start $name: $*"; "$@" >>"$logfile" 2>&1 & local pid=$!; echo $pid >"/tmp/${name}.pid"; wait $pid; local rc=$?; echo "[allinone] $name exited rc=$rc – restart in 3s"; sleep 3; done; }
 
-run_forever dashboard /app/data/dashboard.log python3 /app/monitor/app_fixed.py &
+# Run the exact FreeCash-derived FixedCoin dashboard directly. app_fixed is deliberately not used:
+# it would replace the chain-authoritative block fallback with the older overlay.
+run_forever dashboard /app/data/dashboard.log python3 /app/monitor/app.py &
 DASH_SUPERVISOR_PID=$!
-
 echo "[allinone] dashboard supervisor started on :${DASH_PORT}"
 
 echo "[allinone] start fixedcoind"
@@ -106,31 +69,16 @@ fixedcoind -datadir="$DATADIR" -conf="$DATADIR/fixedcoin.conf" &
 NODE_PID=$!
 
 for i in $(seq 1 180); do
-  if fixedcoin-cli getblockchaininfo >/dev/null 2>&1; then
-    echo "[allinone] RPC ok (${i}s)"
-    break
-  fi
-  if ! kill -0 $NODE_PID 2>/dev/null; then
-    echo "[allinone] fixedcoind died"
-    exit 1
-  fi
-  if [ "$i" -eq 180 ]; then
-    echo "[allinone] RPC timeout"
-    exit 1
-  fi
+  if fixedcoin-cli getblockchaininfo >/dev/null 2>&1; then echo "[allinone] RPC ok (${i}s)"; break; fi
+  if ! kill -0 $NODE_PID 2>/dev/null; then echo "[allinone] fixedcoind died"; exit 1; fi
+  if [ "$i" -eq 180 ]; then echo "[allinone] RPC timeout"; exit 1; fi
   sleep 1
 done
 
 echo "[allinone] verify chain + RPC"
-if FIX_RPC_HOST=127.0.0.1 FIX_RPC_PORT="$RPCPORT" FIX_RPCUSER="$RPCUSER" FIX_RPCPASS="$RPCPASS" \
-  FIX_RPC_IN_CONTAINER=1 python3 /app/tools/verify_chain_rpc.py; then
-  echo "[allinone] chain/RPC verification PASS"
-else
-  echo "[allinone] WARNING: chain/RPC verification FAILED; keeping container alive and starting stratum anyway"
-fi
+if FIX_RPC_HOST=127.0.0.1 FIX_RPC_PORT="$RPCPORT" FIX_RPCUSER="$RPCUSER" FIX_RPCPASS="$RPCPASS" FIX_RPC_IN_CONTAINER=1 python3 /app/tools/verify_chain_rpc.py; then echo "[allinone] chain/RPC verification PASS"; else echo "[allinone] WARNING: chain/RPC verification FAILED; keeping container alive and starting stratum anyway"; fi
 
 python3 /app/scripts/setup_address.py 2>/dev/null || echo "[allinone] address setup skip/later"
-
 run_forever stratum /app/data/stratum.log python3 /app/stratum/server.py &
 STRATUM_SUPERVISOR_PID=$!
 
