@@ -116,15 +116,17 @@ for i in $(seq 1 180); do
   sleep 1
 done
 
-# Verify RPC + genesis + tip + recent chain links + mining template before
-# starting stratum. Dashboard remains available during this verification.
+# Verify chain/RPC before starting stratum, but NEVER kill the all-in-one
+# container because verification is temporarily unavailable. RPC may be
+# usable while the node is syncing/reindexing and the dashboard must remain
+# reachable in that state.
 echo "[allinone] verify chain + RPC"
-FIX_RPC_HOST=127.0.0.1 FIX_RPC_PORT="$RPCPORT" FIX_RPCUSER="$RPCUSER" FIX_RPCPASS="$RPCPASS" \
-  python3 /app/tools/verify_chain_rpc.py || {
-    echo "[allinone] chain/RPC verification FAILED"
-    exit 1
-  }
-echo "[allinone] chain/RPC verification PASS"
+if FIX_RPC_HOST=127.0.0.1 FIX_RPC_PORT="$RPCPORT" FIX_RPCUSER="$RPCUSER" FIX_RPCPASS="$RPCPASS" \
+  FIX_RPC_IN_CONTAINER=1 python3 /app/tools/verify_chain_rpc.py; then
+  echo "[allinone] chain/RPC verification PASS"
+else
+  echo "[allinone] WARNING: chain/RPC verification FAILED; keeping container alive and starting stratum anyway"
+fi
 
 python3 /app/scripts/setup_address.py 2>/dev/null || echo "[allinone] address setup skip/later"
 
