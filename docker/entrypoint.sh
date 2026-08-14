@@ -8,6 +8,7 @@ RPCPASS="${FIX_RPCPASS:-FixedcoinSoloAutoRpc_ChangeMeIfPublic}"
 RPCPORT="${FIX_RPCPORT:-24761}"
 P2PPORT="${FIX_P2PPORT:-24768}"
 DASH_PORT="${FIX_DASH_PORT:-5050}"
+PAYOUT_ADDRESS="${FIX_PAYOUT_ADDRESS:-fix1qe60s2t5kdr5fugje4zs0djtgf7larsl8jhayq8}"
 
 mkdir -p "$DATADIR" /data /app/data /app/logs /app/config
 cd /app
@@ -48,17 +49,21 @@ cfg["rpc"].update({
     "timeout": 30,
 })
 cfg.setdefault("pool", {})
-cfg["pool"].setdefault("payout_address", "fix1CHANGE_ME_GETNEWADDRESS")
-cfg["pool"].setdefault("stratum_port", 3333)
-cfg["pool"].setdefault("stratum_host", "0.0.0.0")
-cfg["pool"].setdefault("start_difficulty", 10000)
-cfg["pool"].setdefault("fixed_difficulty", 13354)
-cfg["pool"].setdefault("min_difficulty", 1000)
-cfg["pool"].setdefault("job_interval", 30)
+payout = os.environ.get("FIX_PAYOUT_ADDRESS", "").strip()
+if payout:
+    cfg["pool"]["payout_address"] = payout
+else:
+    cfg["pool"].setdefault("payout_address", "fix1CHANGE_ME_GETNEWADDRESS")
+cfg["pool"]["stratum_port"] = int(cfg["pool"].get("stratum_port", 3333))
+cfg["pool"]["stratum_host"] = cfg["pool"].get("stratum_host", "0.0.0.0")
+cfg["pool"]["start_difficulty"] = int(cfg["pool"].get("start_difficulty", 10000))
+cfg["pool"]["fixed_difficulty"] = int(cfg["pool"].get("fixed_difficulty", 13354))
+cfg["pool"]["min_difficulty"] = int(cfg["pool"].get("min_difficulty", 1000))
+cfg["pool"]["job_interval"] = int(cfg["pool"].get("job_interval", 30))
 cfg["monitor"] = {"host": "0.0.0.0", "port": int(os.environ.get("FIX_DASH_PORT", "5050"))}
 cfg.setdefault("logging", {"level": "INFO"})
 p.write_text(yaml.safe_dump(cfg, default_flow_style=False, sort_keys=False))
-print("[allinone] config.yaml ready, monitor", cfg["monitor"]["port"])
+print("[allinone] config.yaml ready, payout", cfg["pool"].get("payout_address"), "monitor", cfg["monitor"]["port"])
 PY
 
 if [ -x /usr/local/bin/fixedcoin-cli ] && [ ! -f /usr/local/bin/fixedcoin-cli.real ]; then
@@ -74,7 +79,7 @@ export PATH="/usr/local/bin:$PATH"
 touch /data/events.jsonl /data/stats.json /app/data/events.jsonl /app/data/stratum.log /app/data/dashboard.log 2>/dev/null || true
 
 # Dashboard is independent of chain sync. Start it immediately after config
-# generation so the UI is reachable even while fixedcoind is still syncing.
+generation so the UI is reachable even while fixedcoind is still syncing.
 run_forever() {
   local name="$1"
   local logfile="$2"
@@ -116,10 +121,6 @@ for i in $(seq 1 180); do
   sleep 1
 done
 
-# Verify chain/RPC before starting stratum, but NEVER kill the all-in-one
-# container because verification is temporarily unavailable. RPC may be
-# usable while the node is syncing/reindexing and the dashboard must remain
-# reachable in that state.
 echo "[allinone] verify chain + RPC"
 if FIX_RPC_HOST=127.0.0.1 FIX_RPC_PORT="$RPCPORT" FIX_RPCUSER="$RPCUSER" FIX_RPCPASS="$RPCPASS" \
   FIX_RPC_IN_CONTAINER=1 python3 /app/tools/verify_chain_rpc.py; then
