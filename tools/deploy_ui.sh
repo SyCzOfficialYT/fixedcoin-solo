@@ -25,6 +25,14 @@ t = t.replace(" FCH", " FIX")
 t = t.replace("FreeCash", "FixedCoin")
 t = t.replace("/FCH-Solo/", "/FIX-Solo/")
 
+# FixedCoin requires segwit rule on getblocktemplate
+old_gbt = 'rpc("getblocktemplate", [{"rules": []}]) or rpc("getblocktemplate", [])'
+new_gbt = 'rpc("getblocktemplate", [{"rules": ["segwit"]}])'
+if old_gbt not in t:
+    raise SystemExit("getblocktemplate call pattern not found")
+t = t.replace(old_gbt, new_gbt)
+print("gbt segwit OK")
+
 # 1) Replace coinbase WHILE original def still present
 start = t.find("def build_coinbase_parts(")
 if start < 0:
@@ -70,9 +78,10 @@ if a in t:
 ast.parse(t)
 assert "DEV_ADDRESS" not in t
 assert "dev_spk" not in t
+assert '"segwit"' in t
 assert "blog[-1000:]" in t
 p.write_text(t)
-print("server OK (FIX single-out)")
+print("server OK (FIX single-out + segwit GBT)")
 PY
 
 printf '%s\n' "==> Prepare monitor app"
@@ -82,7 +91,7 @@ sed -i 's/list(reversed(mat))\[:20\]/list(reversed(mat))[:1000]/' "$TMP_DIR/app.
 
 printf '%s\n' "==> Check dashboard"
 test -f monitor/templates/dashboard.html
-grep -E "Live Competition|/api/logs|terminal" monitor/templates/dashboard.html >/dev/null
+grep -E "Live Competition|heightStrip" monitor/templates/dashboard.html >/dev/null
 
 printf '%s\n' "==> Copy into $CONTAINER"
 sudo docker cp "$TMP_DIR/server.py" "$CONTAINER:/app/stratum/server.py"
@@ -94,12 +103,16 @@ if [ -f tools/rebuild_blocks_log.py ]; then
 fi
 sudo docker exec "$CONTAINER" rm -f /app/stratum/server_full.py 2>/dev/null || true
 
-printf '%s\n' "==> Rebuild blocks_log (wallet only)"
-sudo docker exec "$CONTAINER" python3 /app/tools/rebuild_blocks_log.py 2>/dev/null || true
+printf '%s\n' "==> Ensure wallet mining loaded"
+sudo docker exec "$CONTAINER" fixedcoin-cli loadwallet mining 2>/dev/null || \
+  sudo docker exec "$CONTAINER" fixedcoin-cli createwallet mining 2>/dev/null || true
 
 printf '%s\n' "==> Restart"
 sudo docker restart "$CONTAINER"
-sleep 8
-echo "==> Logs (last 40)"
-sudo docker logs "$CONTAINER" --tail 40 2>&1 | tail -40
+sleep 10
+sudo docker exec "$CONTAINER" fixedcoin-cli loadwallet mining 2>/dev/null || true
+echo "==> Logs (last 30)"
+sudo docker logs "$CONTAINER" --tail 30 2>&1 | tail -30
+echo "==> Stratum"
+sudo docker exec "$CONTAINER" tail -20 /app/data/stratum.log 2>/dev/null || true
 echo "Done. Ctrl+F5."

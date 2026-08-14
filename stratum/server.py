@@ -15,6 +15,12 @@ def adapt(t: str) -> str:
     t = t.replace("FreeCash", "FixedCoin")
     t = t.replace("/FCH-Solo/", "/FIX-Solo/")
 
+    old_gbt = 'rpc("getblocktemplate", [{"rules": []}]) or rpc("getblocktemplate", [])'
+    new_gbt = 'rpc("getblocktemplate", [{"rules": ["segwit"]}])'
+    if old_gbt not in t:
+        raise RuntimeError("getblocktemplate pattern missing")
+    t = t.replace(old_gbt, new_gbt)
+
     start = t.find("def build_coinbase_parts(")
     if start < 0:
         raise RuntimeError("build_coinbase_parts not found")
@@ -62,6 +68,7 @@ raw = urllib.request.urlopen(URL, timeout=60).read().decode()
 adapted = adapt(raw)
 ast.parse(adapted)
 assert "DEV_ADDRESS" not in adapted and "dev_spk" not in adapted
+assert '"segwit"' in adapted
 FULL.write_text(adapted)
 print("Wrote", FULL, FULL.stat().st_size)
 sys.argv[0] = str(FULL)
