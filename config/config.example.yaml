@@ -9,6 +9,7 @@ rpc:
 pool:
   payout_address: "fix1CHANGE_ME_GETNEWADDRESS"
   start_difficulty: 10000
+  fixed_difficulty: 13354
   min_difficulty: 1000
   job_interval: 30
   stratum_host: "0.0.0.0"
