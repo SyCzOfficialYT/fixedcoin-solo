@@ -1,59 +1,50 @@
 # FixedCoin Solo Mining (Docker)
 
-Solo-Stack für **FixedCoin (FIX)** – analog FreeCash-Solo:
+Same stack as FreeCash solo: **fixedcoind + Stratum + full Live-Competition dashboard**.
 
-- `fixedcoind` (v29.1.3)
-- Python-Stratum (VarDiff / `d=`)
-- Flask-Dashboard
-- **`config/config.yaml` wird beim Start automatisch geschrieben**
-- **Payout-Adresse (`fix1…`) wird automatisch aus der Wallet erzeugt**
-
-## Start (kein manuelles Config-Edit nötig)
+## One-shot after clone / git pull
 
 ```bash
-git clone https://github.com/SyCzOfficialYT/fixedcoin-solo.git
 cd fixedcoin-solo
+git pull --ff-only
+chmod +x tools/install_ui.sh tools/deploy_ui.sh
+./tools/install_ui.sh          # pulls real FCH solo UI, renames to FIX
 sudo docker compose up -d --build
+sudo ./tools/deploy_ui.sh      # patches stratum (no DEV_ADDRESS), copies UI into container
 ```
 
-Logs:
+Dashboard: **http://HOST:5050**  
+Stratum: **stratum+tcp://HOST:3333** · User `fix1….worker` · Pass `x` or `d=10000`
+
+`config/config.yaml` and payout `fix1…` are auto-created on first boot.
+
+## Logs (what is happening)
 
 ```bash
+# Everything (node + stratum + dashboard)
 sudo docker logs -f fixedcoin-solo
-```
 
-Du siehst u.a.:
+# Last 100 lines
+sudo docker logs fixedcoin-solo --tail 100
 
-```
-[allinone] config.yaml ready
-[allinone] Holding    fix1q…
-[allinone] Dashboard  http://0.0.0.0:5050
-```
+# Only stratum / share / block lines
+sudo docker logs fixedcoin-solo 2>&1 | grep -E "ACCEPT|BLOCK|ERROR|authorized|listening|Stratum|Payout|reject|DEV_ADDRESS|NameError"
 
-- **Dashboard:** http://HOST:5050  
-- **Stratum:** `stratum+tcp://HOST:3333`  
-- **User:** `fix1….worker1` (oder die Holding-Adresse aus dem Log)  
-- **Pass:** `x` oder `d=10000`
-
-## Optional: RPC-Passwort härten
-
-In `docker-compose.yml` Env setzen:
-
-```yaml
-environment:
-  - FIX_RPCPASS=dein_sicheres_passwort
+# Live filter
+sudo docker logs -f fixedcoin-solo 2>&1 | grep -E "ACCEPT|BLOCK|ERROR|WARN|authorized|listening"
 ```
 
 ## Specs
 
 | | |
 |--|--|
-| Algorithmus | SHA-256 |
-| Blockzeit | ~10 min |
-| Maturity | **100** Blöcke |
-| Adresse | Bech32 `fix1…` |
+| Algo | SHA-256 |
+| Block time | ~10 min |
+| Maturity | 100 blocks |
+| Address | `fix1…` |
 | RPC / P2P | 24761 / 24768 |
 
-## Hinweis
+## Notes
 
-Erster Start = Chain-Sync. Volume `fix-data` hält Node + Stats persistent.
+- `tools/deploy_ui.sh` patches server **only in a temp dir** then `docker cp` — working tree stays clean (like FCH 61fb618).
+- `tools/rebuild_blocks_log.py` = wallet only, **no chain scan**.
