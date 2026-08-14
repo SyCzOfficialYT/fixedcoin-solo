@@ -52,6 +52,7 @@ cfg["pool"].setdefault("payout_address", "fix1CHANGE_ME_GETNEWADDRESS")
 cfg["pool"].setdefault("stratum_port", 3333)
 cfg["pool"].setdefault("stratum_host", "0.0.0.0")
 cfg["pool"].setdefault("start_difficulty", 10000)
+cfg["pool"].setdefault("fixed_difficulty", 13354)
 cfg["pool"].setdefault("min_difficulty", 1000)
 cfg["pool"].setdefault("job_interval", 30)
 cfg["monitor"] = {"host": "0.0.0.0", "port": int(os.environ.get("FIX_DASH_PORT", "5050"))}
@@ -69,6 +70,31 @@ exec /usr/local/bin/fixedcoin-cli.real -datadir="$DATADIR" -rpcuser="$RPCUSER" -
 EOF
 chmod +x /usr/local/bin/fixedcoin-cli
 export PATH="/usr/local/bin:$PATH"
+
+touch /data/events.jsonl /data/stats.json /app/data/events.jsonl /app/data/stratum.log /app/data/dashboard.log 2>/dev/null || true
+
+# Dashboard is independent of chain sync. Start it immediately after config
+# generation so the UI is reachable even while fixedcoind is still syncing.
+run_forever() {
+  local name="$1"
+  local logfile="$2"
+  shift 2
+  while true; do
+    echo "[allinone] start $name: $*"
+    "$@" >>"$logfile" 2>&1 &
+    local pid=$!
+    echo $pid >"/tmp/${name}.pid"
+    wait $pid
+    local rc=$?
+    echo "[allinone] $name exited rc=$rc – restart in 3s"
+    sleep 3
+  done
+}
+
+run_forever dashboard /app/data/dashboard.log python3 /app/monitor/app.py &
+DASH_SUPERVISOR_PID=$!
+
+echo "[allinone] dashboard supervisor started on :${DASH_PORT}"
 
 echo "[allinone] start fixedcoind"
 fixedcoind -datadir="$DATADIR" -conf="$DATADIR/fixedcoin.conf" &
@@ -91,7 +117,7 @@ for i in $(seq 1 180); do
 done
 
 # Verify RPC + genesis + tip + recent chain links + mining template before
-# starting stratum/dashboard. This makes a broken chain/RPC fail fast.
+# starting stratum. Dashboard remains available during this verification.
 echo "[allinone] verify chain + RPC"
 FIX_RPC_HOST=127.0.0.1 FIX_RPC_PORT="$RPCPORT" FIX_RPCUSER="$RPCUSER" FIX_RPCPASS="$RPCPASS" \
   python3 /app/tools/verify_chain_rpc.py || {
@@ -101,26 +127,9 @@ FIX_RPC_HOST=127.0.0.1 FIX_RPC_PORT="$RPCPORT" FIX_RPCUSER="$RPCUSER" FIX_RPCPAS
 echo "[allinone] chain/RPC verification PASS"
 
 python3 /app/scripts/setup_address.py 2>/dev/null || echo "[allinone] address setup skip/later"
-touch /data/events.jsonl /data/stats.json /app/data/events.jsonl /app/data/stratum.log /app/data/dashboard.log 2>/dev/null || true
-
-run_forever() {
-  local name="$1"
-  local logfile="$2"
-  shift 2
-  while true; do
-    echo "[allinone] start $name: $*"
-    "$@" >>"$logfile" 2>&1 &
-    local pid=$!
-    echo $pid >"/tmp/${name}.pid"
-    wait $pid
-    local rc=$?
-    echo "[allinone] $name exited rc=$rc – restart in 3s"
-    sleep 3
-  done
-}
 
 run_forever stratum /app/data/stratum.log python3 /app/stratum/server.py &
-run_forever dashboard /app/data/dashboard.log python3 /app/monitor/app.py &
+STRATUM_SUPERVISOR_PID=$!
 
 sleep 3
 ADDR=$(python3 -c "import yaml;print(yaml.safe_load(open('/app/config/config.yaml')).get('pool',{}).get('payout_address','?'))" 2>/dev/null || echo "?")
