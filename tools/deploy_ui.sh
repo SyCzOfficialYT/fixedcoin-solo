@@ -25,7 +25,6 @@ t = t.replace(" FCH", " FIX")
 t = t.replace("FreeCash", "FixedCoin")
 t = t.replace("/FCH-Solo/", "/FIX-Solo/")
 
-# FixedCoin requires segwit rule on getblocktemplate
 old_gbt = 'rpc("getblocktemplate", [{"rules": []}]) or rpc("getblocktemplate", [])'
 new_gbt = 'rpc("getblocktemplate", [{"rules": ["segwit"]}])'
 if old_gbt not in t:
@@ -33,7 +32,22 @@ if old_gbt not in t:
 t = t.replace(old_gbt, new_gbt)
 print("gbt segwit OK")
 
-# 1) Replace coinbase WHILE original def still present
+# Fix call sites BEFORE stripping dev_spk lines (multiline)
+t = t.replace(
+    'build_coinbase_parts(\n            job["height"], job["value"], job["spk"], job["dev_spk"],',
+    'build_coinbase_parts(\n            job["height"], job["value"], job["spk"],',
+)
+t = t.replace(
+    'build_coinbase_parts(\n            job["height"], job["value"], job["spk"], job["dev_spk"])',
+    'build_coinbase_parts(\n            job["height"], job["value"], job["spk"])',
+)
+# single-line variants
+t = t.replace(
+    'build_coinbase_parts(job["height"], job["value"], job["spk"], job["dev_spk"]',
+    'build_coinbase_parts(job["height"], job["value"], job["spk"]',
+)
+print("call sites OK")
+
 start = t.find("def build_coinbase_parts(")
 if start < 0:
     raise SystemExit("build_coinbase_parts not found")
@@ -57,7 +71,7 @@ single = (
 )
 t = t[:start] + single + t[end:]
 
-# 2) Drop DEV / dual-output leftovers
+# Drop DEV / dual-output leftovers
 t = "\n".join(
     ln for ln in t.splitlines()
     if "DEV_ADDRESS" not in ln and "dev_spk" not in ln
@@ -80,6 +94,8 @@ assert "DEV_ADDRESS" not in t
 assert "dev_spk" not in t
 assert '"segwit"' in t
 assert "blog[-1000:]" in t
+# remaining calls must pass spk
+assert 'job["spk"]' in t
 p.write_text(t)
 print("server OK (FIX single-out + segwit GBT)")
 PY
@@ -93,7 +109,7 @@ printf '%s\n' "==> Check dashboard"
 test -f monitor/templates/dashboard.html
 grep -E "Live Competition|heightStrip" monitor/templates/dashboard.html >/dev/null
 
-printf '%s\n' "==> Copy into $CONTAINER"
+printf '%s\n' "==> Copy into $CONTAINER (NO full restart if possible)"
 sudo docker cp "$TMP_DIR/server.py" "$CONTAINER:/app/stratum/server.py"
 sudo docker cp "$TMP_DIR/app.py" "$CONTAINER:/app/monitor/app.py"
 sudo docker cp monitor/templates/dashboard.html "$CONTAINER:/app/monitor/templates/dashboard.html"
@@ -103,16 +119,18 @@ if [ -f tools/rebuild_blocks_log.py ]; then
 fi
 sudo docker exec "$CONTAINER" rm -f /app/stratum/server_full.py 2>/dev/null || true
 
-printf '%s\n' "==> Ensure wallet mining loaded"
-sudo docker exec "$CONTAINER" fixedcoin-cli loadwallet mining 2>/dev/null || \
-  sudo docker exec "$CONTAINER" fixedcoin-cli createwallet mining 2>/dev/null || true
+# Prefer killing only stratum so node keeps syncing
+if sudo docker exec "$CONTAINER" test -f /tmp/stratum.pid; then
+  echo "==> Restart stratum only"
+  sudo docker exec "$CONTAINER" sh -c 'kill $(cat /tmp/stratum.pid) 2>/dev/null || true'
+  sleep 4
+else
+  echo "==> Full restart (no stratum.pid)"
+  sudo docker restart "$CONTAINER"
+  sleep 10
+  sudo docker exec "$CONTAINER" fixedcoin-cli loadwallet mining 2>/dev/null || true
+fi
 
-printf '%s\n' "==> Restart"
-sudo docker restart "$CONTAINER"
-sleep 10
-sudo docker exec "$CONTAINER" fixedcoin-cli loadwallet mining 2>/dev/null || true
-echo "==> Logs (last 30)"
-sudo docker logs "$CONTAINER" --tail 30 2>&1 | tail -30
-echo "==> Stratum"
-sudo docker exec "$CONTAINER" tail -20 /app/data/stratum.log 2>/dev/null || true
+echo "==> Stratum tail"
+sudo docker exec "$CONTAINER" tail -25 /app/data/stratum.log 2>/dev/null || true
 echo "Done. Ctrl+F5."
