@@ -56,10 +56,20 @@ chmod +x /usr/local/bin/fixedcoin-cli
 export PATH="/usr/local/bin:$PATH"
 touch /data/events.jsonl /data/stats.json /app/data/events.jsonl /app/data/stratum.log /app/data/dashboard.log 2>/dev/null || true
 
+# Fail fast if the image does not contain the exact NEW-FCH dashboard contract
+# or if the Flask root route is missing (prevents another silent 404 deployment).
+python3 - <<'PY'
+from pathlib import Path
+from monitor.app import app
+p = Path('/app/monitor/templates/dashboard.html')
+assert p.exists() and p.stat().st_size == 17311, f'dashboard.html mismatch: {p.stat().st_size if p.exists() else "missing"}'
+assert any(r.rule == '/' for r in app.url_map.iter_rules()), 'Flask dashboard route / is missing'
+print('[allinone] dashboard verification PASS: exact NEW-FCH template + / route')
+PY
+
 run_forever() { local name="$1"; local logfile="$2"; shift 2; while true; do echo "[allinone] start $name: $*"; "$@" >>"$logfile" 2>&1 & local pid=$!; echo $pid >"/tmp/${name}.pid"; wait $pid; local rc=$?; echo "[allinone] $name exited rc=$rc – restart in 3s"; sleep 3; done; }
 
-# Run the exact FreeCash-derived FixedCoin dashboard directly. app_fixed is deliberately not used:
-# it would replace the chain-authoritative block fallback with the older overlay.
+# Run the exact FreeCash-derived FixedCoin dashboard directly. app_fixed is deliberately not used.
 run_forever dashboard /app/data/dashboard.log python3 /app/monitor/app.py &
 DASH_SUPERVISOR_PID=$!
 echo "[allinone] dashboard supervisor started on :${DASH_PORT}"
