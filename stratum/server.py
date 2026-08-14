@@ -46,12 +46,21 @@ def adapt(t: str) -> str:
     end_fixed = start_fixed + 1 + m_fixed.start()
     fixed_parser = (
         "def parse_fixed_diff(*candidates):\n"
-        "    \"\"\"Enable fixed difficulty when a miner explicitly supplies d=/diff=.\"\"\"\n"
+        "    \"\"\"Parse an explicitly requested miner difficulty from password/worker.\"\"\"\n"
         "    for raw in candidates:\n"
         "        if not raw or not isinstance(raw, str):\n"
         "            continue\n"
-        "        if re.search(r\"(?:^|[;,\\s])(?:d|diff)\\s*[=:]\\s*\\d+(?:\\.\\d+)?\", raw, re.I):\n"
-        "            return FIXED_DIFF\n"
+        "        m = re.search(r\"(?:^|[;,\\s])(?:d|diff)\\s*[=:]\\s*(\\d+(?:\\.\\d+)?)\", raw, re.I)\n"
+        "        if not m:\n"
+        "            m = re.match(r\"^(?:d|diff)\\s*[=:]\\s*(\\d+(?:\\.\\d+)?)$\", raw.strip(), re.I)\n"
+        "        if not m:\n"
+        "            continue\n"
+        "        try:\n"
+        "            d = float(m.group(1))\n"
+        "        except (TypeError, ValueError):\n"
+        "            continue\n"
+        "        if 16 <= d <= MAX_DIFF:\n"
+        "            return int(round(d))\n"
         "    return None\n\n"
     )
     t = t[:start_fixed] + fixed_parser + t[end_fixed:]
@@ -114,8 +123,7 @@ if os.environ.get("STRATUM_BUILD_ONLY") == "1":
     generate_server()
     raise SystemExit(0)
 
-# Keep the generated server. The old implementation deleted it on every start,
-# forcing a network fetch and making the container look hung when GitHub was slow.
+# Keep the generated server. Runtime startup is local and does not fetch GitHub.
 if not FULL.exists() or FULL.stat().st_size < 1000:
     generate_server()
 
