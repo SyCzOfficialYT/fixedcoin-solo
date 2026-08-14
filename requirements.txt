@@ -1,4 +1,6 @@
-flask
-pyyaml
-requests
-base58
+flask>=3.0
+gunicorn>=22.0
+requests>=2.32
+python-dotenv>=1.0
+pyyaml>=6.0
+base58>=2.1

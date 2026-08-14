@@ -1,158 +1,204 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>FixedCoin Solo</title>
-<style>
-:root{--bg:#0b0e14;--panel:#12161f;--panel2:#1a2030;--border:#243044;--text:#e6edf7;--muted:#8b9bb4;--green:#4ade80;--cyan:#38bdf8;--red:#f87171;--yellow:#fbbf24}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
-header{display:flex;justify-content:space-between;align-items:center;padding:1.25rem 1.75rem;border-bottom:1px solid var(--border);background:var(--panel)}
-header h1{font-size:1.15rem}header h1 span{color:var(--cyan)}
-.badge{padding:.35rem .75rem;border-radius:999px;background:#132a1f;color:var(--green);border:1px solid #1f4d35;font-size:.8rem}
-.badge.bad{background:#2a1313;color:var(--red);border-color:#4d1f1f}
-main{padding:1.5rem;max-width:1200px;margin:0 auto}
-.net-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:1px;background:var(--border);margin-top:1rem}
-.net-stats .cell{background:var(--panel);padding:1rem 1.1rem}
-.net-stats .label{font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
-.net-stats .val{font-size:1.25rem;font-weight:600;margin-top:.2rem}
-.net-stats .sub{font-size:.75rem;color:var(--muted);margin-top:.15rem}
-.round-card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:1.25rem 1.5rem;margin:1.25rem 0}
-.round-card h2{font-size:.85rem;color:var(--muted);font-weight:500;margin-bottom:.75rem;text-transform:uppercase;letter-spacing:.05em}
-.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1.25rem}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:1.25rem 1.4rem}
-.card h3{font-size:.8rem;color:var(--muted);margin-bottom:.75rem;text-transform:uppercase}
-.stat-row{display:flex;justify-content:space-between;padding:.4rem 0;border-bottom:1px solid var(--border);font-size:.9rem}
-.stat-row .k{color:var(--muted)}.stat-row .v{font-weight:600}
-.v.ok{color:var(--green)}.v.yellow{color:var(--yellow)}.v.cyan{color:var(--cyan)}
-.progress-track{height:14px;background:var(--panel2);border-radius:999px;overflow:hidden;border:1px solid var(--border);margin-top:.5rem}
-.progress-fill{height:100%;background:linear-gradient(90deg,#1d4ed8,#3b82f6,#38bdf8);border-radius:999px;transition:width .6s}
-.term-wrap{margin-top:1.25rem;background:#0a0c10;border:1px solid var(--border);border-radius:12px;overflow:hidden}
-.term-bar{display:flex;justify-content:space-between;padding:.55rem 1rem;background:#10141c;border-bottom:1px solid var(--border);font-size:.75rem;color:var(--muted)}
-#term{height:260px;overflow-y:auto;padding:.75rem 1rem;font-family:ui-monospace,monospace;font-size:.75rem;line-height:1.45}
-.t-line{margin:.15rem 0}.t-ERROR,.t-WARN{color:var(--red)}.t-OK{color:var(--green)}.t-snap{color:var(--cyan)}
-#blocksBody{max-height:420px;overflow-y:auto}
-.hint{font-size:.8rem;color:var(--muted);margin-top:.5rem}
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FIX Solo – FixedCoin Node Dashboard</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --card: #1a1d24;
+      --border: #2a2f3a;
+      --text: #e6e8ec;
+      --muted: #8b93a7;
+      --accent: #3b82f6;
+      --green: #22c55e;
+      --orange: #f59e0b;
+      --red: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 1rem;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+    h1 { font-size: 1.5rem; font-weight: 600; }
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.6rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .badge.ok { background: rgba(34,197,94,0.15); color: var(--green); }
+    .badge.sync { background: rgba(245,158,11,0.15); color: var(--orange); }
+    .badge.err { background: rgba(239,68,68,0.15); color: var(--red); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+    }
+    .card .label { color: var(--muted); font-size: 0.8rem; margin-bottom: 0.25rem; }
+    .card .value { font-size: 1.4rem; font-weight: 600; }
+    .card .sub { font-size: 0.75rem; color: var(--muted); margin-top: 0.25rem; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+    th, td {
+      padding: 0.6rem 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    th { color: var(--muted); font-weight: 500; font-size: 0.8rem; }
+    .section-title {
+      font-size: 1rem;
+      font-weight: 600;
+      margin: 1.5rem 0 0.75rem;
+    }
+    .footer {
+      margin-top: 2rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-align: center;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    .refresh { font-size: 0.8rem; color: var(--muted); }
+  </style>
 </head>
 <body>
-<header>
-  <h1><span>FixedCoin</span> Solo · FIX</h1>
-  <div class="badge" id="syncBadge"><span id="syncText">…</span></div>
-</header>
-<main>
-  <p class="hint">Block → Unconfirmed → nach <strong id="matHint">100</strong> Blöcken (~16.7h) → Confirmed</p>
-  <section class="net-stats">
-    <div class="cell"><div class="label">Height</div><div class="val" id="vHeight">–</div><div class="sub">chain tip</div></div>
-    <div class="cell"><div class="label">Difficulty</div><div class="val" id="vDiff">–</div><div class="sub">network</div></div>
-    <div class="cell"><div class="label">Hashrate</div><div class="val" id="vHr">–</div><div class="sub">est.</div></div>
-    <div class="cell"><div class="label">Unconfirmed</div><div class="val yellow" id="vUnc">–</div><div class="sub">FIX</div></div>
-    <div class="cell"><div class="label">Confirmed</div><div class="val ok" id="vConf">–</div><div class="sub">FIX</div></div>
-    <div class="cell"><div class="label">Blocks</div><div class="val" id="vBlocks">0</div><div class="sub">found</div></div>
-  </section>
-  <div class="round-card">
-    <h2>Live Competition · aktuelle Runde (~10 min Ziel)</h2>
-    <div style="display:flex;flex-wrap:wrap;gap:1rem;font-size:.9rem">
-      <div><span style="color:var(--muted)">Target</span> <strong id="vDiff2">–</strong></div>
-      <div><span style="color:var(--muted)">Best share</span> <strong id="vBest">–</strong></div>
-      <div><span style="color:var(--muted)">Best vs net</span> <strong id="vBestPct">0%</strong></div>
-      <div><span style="color:var(--muted)">Round effort</span> <strong id="vEffort">0%</strong></div>
-      <div><span style="color:var(--muted)">Est. block</span> <strong id="vEta">–</strong></div>
+  <div class="header">
+    <div>
+      <h1>FIX – FixedCoin Solo Node</h1>
+      <div class="refresh">Mining-Dutch style • Auto-refresh 10s</div>
     </div>
-    <div class="progress-track"><div class="progress-fill" id="effortBar" style="width:0%"></div></div>
+    <div>
+      {% if stats.error %}
+        <span class="badge err">RPC ERROR</span>
+      {% elif stats.synced %}
+        <span class="badge ok">SYNCED</span>
+      {% else %}
+        <span class="badge sync">SYNCING</span>
+      {% endif %}
+    </div>
   </div>
-  <div class="grid2">
+
+  {% if stats.error %}
+    <div class="card" style="border-color: var(--red);">
+      <div class="label">Error</div>
+      <div class="value" style="font-size:1rem;">{{ stats.error }}</div>
+      <div class="sub">Check fixedcoind is running and RPC credentials are correct.</div>
+    </div>
+  {% else %}
+
+  <div class="section-title">Network</div>
+  <div class="grid">
     <div class="card">
-      <h3>Mining Stats</h3>
-      <div class="stat-row"><span class="k">Shares OK</span><span class="v ok" id="vOk">0</span></div>
-      <div class="stat-row"><span class="k">Rejected</span><span class="v" id="vBad">0</span></div>
-      <div class="stat-row"><span class="k">Reject %</span><span class="v" id="vRej">0%</span></div>
-      <div class="stat-row"><span class="k">Share diff</span><span class="v" id="vShareDiff">–</span></div>
-      <div class="stat-row"><span class="k">Payout</span><span class="v cyan" id="holdingAddr" style="font-size:.72rem;max-width:55%;word-break:break-all">–</span></div>
+      <div class="label">Height</div>
+      <div class="value">{{ stats.height or "–" }}</div>
+      <div class="sub">Headers: {{ stats.headers or "–" }}</div>
     </div>
     <div class="card">
-      <h3>Blöcke · Validity (100)</h3>
-      <div id="blocksBody"><div class="stat-row"><span class="k">Noch keine Blöcke</span><span class="v">–</span></div></div>
+      <div class="label">Difficulty</div>
+      <div class="value">{{ "%.4f"|format(stats.difficulty) if stats.difficulty else "–" }}</div>
+    </div>
+    <div class="card">
+      <div class="label">Network Hashrate</div>
+      <div class="value">
+        {% if stats.nethash %}
+          {{ "%.2f"|format(stats.nethash / 1e12) }} TH/s
+        {% else %}–{% endif %}
+      </div>
+      <div class="sub">approx. (last 120 blocks)</div>
+    </div>
+    <div class="card">
+      <div class="label">Connections</div>
+      <div class="value">{{ stats.connections or "–" }}</div>
+    </div>
+    <div class="card">
+      <div class="label">Mempool</div>
+      <div class="value">{{ stats.mempool_size or 0 }}</div>
+      <div class="sub">{{ stats.mempool_bytes or 0 }} bytes</div>
+    </div>
+    <div class="card">
+      <div class="label">Chain</div>
+      <div class="value" style="font-size:1.1rem;">{{ stats.chain or "–" }}</div>
+      <div class="sub">Verification {{ "%.1f"|format((stats.verification_progress or 0)*100) }}%</div>
     </div>
   </div>
-  <div class="term-wrap">
-    <div class="term-bar"><span><strong>CLI Terminal</strong></span><span id="termMeta">poll 2s</span></div>
-    <div id="term"></div>
+
+  <div class="section-title">Pool Information (SOLO)</div>
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>Mode</th>
+          <th>Shares OK</th>
+          <th>Rejected</th>
+          <th>Blocks</th>
+          <th>Effort</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>SOLO</strong></td>
+          <td>{{ stats.shares_ok or 0 }}</td>
+          <td>{{ stats.shares_bad or 0 }}</td>
+          <td>{{ stats.blocks_found or 0 }}</td>
+          <td>{{ "%.2f"|format(stats.effort_pct or 0) }}%</td>
+          <td>›</td>
+        </tr>
+        <tr>
+          <td>Personal</td>
+          <td colspan="4">Best share: {{ stats.best_share or "–" }}</td>
+          <td>›</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="sub" style="margin-top:0.75rem;">
+      Point your SHA-256 ASIC to <code>stratum+tcp://HOST:3333</code>
+      · User: <code>fix1….worker</code> · Pass: <code>x</code> or <code>d=10000</code>.
+      Node is ready when badge shows SYNCED.
+    </div>
   </div>
-</main>
-<script>
-(function(){
-  const term = document.getElementById('term');
-  let lastTerm = '';
-  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
-  function fmtDurMin(left){
-    if(left==null) return '–';
-    const m = left * 10; // ~10 min/block
-    if(m < 60) return m + 'm';
-    return Math.floor(m/60) + 'h ' + (m%60) + 'm';
-  }
-  function renderBlocks(rows){
-    const box = document.getElementById('blocksBody');
-    if(!rows||!rows.length){ box.innerHTML = '<div class="stat-row"><span class="k">Noch keine Blöcke</span><span class="v">–</span></div>'; return; }
-    box.innerHTML = rows.map(function(b){
-      const st = b.spendable ? '<span class="v ok">CONFIRMED</span>'
-        : '<span class="v yellow">'+b.confs+'/100 · noch '+fmtDurMin(b.left)+'</span>';
-      return '<div class="stat-row"><span class="k">#'+esc(b.height)+' · '+esc(b.hash)+' · '+esc(b.reward)+' FIX</span>'+st+'</div>';
-    }).join('');
-  }
-  function applyStatus(d){
-    if(!d) return;
-    const badge = document.getElementById('syncBadge');
-    const st = document.getElementById('syncText');
-    if(d.synced){ badge.classList.remove('bad'); st.textContent = 'Synced · '+(d.connections||0)+' peers'; }
-    else { badge.classList.add('bad'); st.textContent = 'Syncing… · '+(d.connections||0)+' peers'; }
-    if(d.height!=null) document.getElementById('vHeight').textContent = d.height;
-    if(d.difficulty_fmt){ document.getElementById('vDiff').textContent = d.difficulty_fmt; document.getElementById('vDiff2').textContent = d.difficulty_fmt; }
-    if(d.hashrate_fmt) document.getElementById('vHr').textContent = d.hashrate_fmt;
-    document.getElementById('vUnc').textContent = d.unconfirmed_fmt||'0';
-    document.getElementById('vConf').textContent = d.confirmed_fmt||'0';
-    document.getElementById('vBlocks').textContent = d.blocks_found||0;
-    document.getElementById('vOk').textContent = d.shares_ok||0;
-    document.getElementById('vBad').textContent = d.shares_bad||0;
-    document.getElementById('vRej').textContent = (d.reject_pct!=null?d.reject_pct:0)+'%';
-    if(d.share_diff_fmt) document.getElementById('vShareDiff').textContent = d.share_diff_fmt;
-    document.getElementById('vBest').textContent = d.best_share_fmt||'–';
-    document.getElementById('vBestPct').textContent = (d.best_pct!=null?d.best_pct:0)+'%';
-    document.getElementById('vEffort').textContent = (d.effort_pct!=null?d.effort_pct:0)+'%';
-    document.getElementById('vEta').textContent = d.eta_fmt||'∞';
-    document.getElementById('effortBar').style.width = Math.min(100, Number(d.best_pct!=null?d.best_pct:d.effort_pct)||0)+'%';
-    if(d.payout) document.getElementById('holdingAddr').textContent = d.payout;
-    if(d.maturity_blocks) document.getElementById('matHint').textContent = d.maturity_blocks;
-    renderBlocks(d.blocks_log);
-  }
-  function renderEvents(events, snapshot, ts){
-    const parts = [];
-    if(snapshot) parts.push('<div class="t-line t-snap">['+esc(ts)+'] STATS height='+esc(snapshot.height)+' ok='+esc(snapshot.shares_ok)+' bad='+esc(snapshot.shares_bad)+' blocks='+esc(snapshot.blocks_found)+'</div>');
-    (events||[]).forEach(function(e){ const lvl=e.level||'INFO'; parts.push('<div class="t-line t-'+esc(lvl)+'">['+esc(e.ts||'')+'] '+esc(lvl)+' '+esc(e.msg)+'</div>'); });
-    const html = parts.join('');
-    if(html === lastTerm) return;
-    lastTerm = html;
-    const atBottom = term.scrollTop + term.clientHeight >= term.scrollHeight - 40;
-    term.innerHTML = html || '<div class="t-line">warte…</div>';
-    if(atBottom) term.scrollTop = term.scrollHeight;
-    document.getElementById('termMeta').textContent = 'live · '+(ts||'');
-  }
-  async function tick(){
-    try{
-      const rs = await fetch('/api/status');
-      if(!rs.ok) throw new Error('status');
-      applyStatus(await rs.json());
-    }catch(e){ document.getElementById('termMeta').textContent = 'poll error'; return; }
-    try{
-      const rl = await fetch('/api/logs');
-      if(!rl.ok) throw new Error('logs');
-      const logs = await rl.json();
-      renderEvents(logs.events, logs.snapshot, logs.ts);
-    }catch(e){ document.getElementById('termMeta').textContent = 'logs error'; }
-  }
-  tick(); setInterval(tick, 2000);
-})();
-</script>
+
+  {% if address %}
+  <div class="section-title">Your Address</div>
+  <div class="card">
+    <div class="value" style="font-size:1rem; word-break:break-all;">{{ address }}</div>
+    <div class="sub">Configured payout / coinbase address (auto from wallet)</div>
+  </div>
+  {% endif %}
+
+  {% endif %}
+
+  <div class="footer">
+    FixedCoin Solo Stack • Powered by fixedcoind + Flask •
+    Refresh interval: 10 s •
+    <a href="/api/stats">API</a>
+  </div>
+
+  <script>
+    setTimeout(() => location.reload(), 10000);
+  </script>
 </body>
 </html>
