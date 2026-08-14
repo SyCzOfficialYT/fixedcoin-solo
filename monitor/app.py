@@ -58,34 +58,25 @@ def merge_runtime_stats(stats,logstats):
     for k in ("shares_ok","shares_bad","round_height","network_diff","round_work","round_shares","best_share_diff","last_share_work","last_share_time","last_share_hash","blocks_found"):
         if not out.get(k) and logstats.get(k):out[k]=logstats[k]
     return out
-def load_events(limit=160):
-    out=[]
-    for raw in read_tail_lines(EVENTS_PATH,limit):
-        try:out.append(json.loads(raw))
-        except Exception:
-            if raw.strip():out.append({"ts":"","level":"INFO","msg":raw})
-    if len(out)<5:
-        for raw in read_tail_lines(STRATUM_LOG,300):
-            if any(x in raw for x in ("ACCEPT","BLOCK","ERROR","REJECT","authorize","NEW ROUND")):out.append({"ts":raw[:19],"level":"OK" if "ACCEPT" in raw or "BLOCK" in raw else ("WARN" if "REJECT" in raw else "INFO"),"msg":raw[20:].strip()})
-    return out[-limit:]
 def fmt_diff(v):
-    try:v=float(v or 0)
-    except Exception:return "–"
-    if v<=0:return "0"
-    for unit,scale in (("T",1e12),("G",1e9),("M",1e6),("k",1e3)):
-        if v>=scale:return f"{v/scale:.2f} {unit}"
-    return f"{v:.2f}"
+    try:v=float(v)
+    except Exception:return "0"
+    if v>=1e9:return f"{v/1e9:.2f} G"
+    if v>=1e6:return f"{v/1e6:.2f} M"
+    if v>=1e3:return f"{v/1e3:.2f} K"
+    return f"{v:.0f}"
 def fmt_hashrate(v):
-    try:v=float(v or 0)
+    try:v=float(v)
     except Exception:return "–"
-    if v<=0:return "–"
-    for u,s in (("EH/s",1e18),("PH/s",1e15),("TH/s",1e12),("GH/s",1e9),("MH/s",1e6),("kH/s",1e3)):
-        if v>=s:return f"{v/s:.2f} {u}"
-    return f"{v:.0f} H/s"
-def fmt_duration(sec):
-    try:sec=max(0,int(sec))
-    except Exception:return "–"
-    m,s=divmod(sec,60); h,m=divmod(m,60); d,h=divmod(h,24); return f"{d}d {h}h" if d else (f"{h}h {m}m" if h else f"{m}m {s:02d}s")
+    for u in ((1e18,"EH/s"),(1e15,"PH/s"),(1e12,"TH/s"),(1e9,"GH/s"),(1e6,"MH/s"),(1e3,"KH/s")):
+        if v>=u[0]:return f"{v/u[0]:.2f} {u[1]}"
+    return f"{v:.2f} H/s" if v>0 else "–"
+def fmt_duration(s):
+    if s is None:return "–"
+    s=max(0,int(s));
+    if s<60:return f"{s}s"
+    if s<3600:return f"{s//60}m {s%60}s"
+    return f"{s//3600}h {(s%3600)//60}m"
 def maturity_info(height,items):
     out=[]
     for b in items or []:
@@ -126,7 +117,7 @@ def build_payload():
     s=merge_runtime_stats(load_stats(),parse_stratum_log()); info,info_err=rpc("getblockchaininfo"); net,_=rpc("getnetworkinfo"); gbt,_=rpc("getblocktemplate",[{"rules":["segwit"]}]); tip=info or {}; height=int(tip.get("blocks") or s.get("round_height") or 0); headers=int(tip.get("headers") or height); difficulty=float(tip.get("difficulty") or s.get("network_diff") or 0); connections=int((net or {}).get("connections") or 0); synced=bool(info) and not tip.get("initialblockdownload",True) and height>=max(headers-1,0); ok=int(s.get("shares_ok") or 0); bad=int(s.get("shares_bad") or 0); total=ok+bad; reject=100*bad/total if total else 0; best=float(s.get("best_share_diff") or 0); last=float(s.get("last_share_work") or 0); pd=resolve_pool_diff(s); nd=float(s.get("network_diff") or difficulty or 1); rw=float(s.get("round_work") or 0); effort=float(s.get("round_effort_pct") or (100*rw/nd if nd and rw else 0)); eta=nd/max(last,1e-12)*TARGET_BLOCK_SEC if last and nd else None; wb=wallet_balances(); holding=HOLDING or s.get("payout") or ""; round_height=int(s.get("round_height") or height); job_height=int((gbt or {}).get("height") or round_height or height); prev=(gbt or {}).get("previousblockhash") or "–"; mat=maturity_info(height,s.get("blocks_log") or []); tip_time=int(tip.get("time") or time.time()); found={int(b.get("height") or 0) for b in s.get("blocks_log") or []}
     return {"synced":synced,"height":height,"headers":headers,"difficulty":difficulty,"network_diff":nd,"difficulty_fmt":fmt_diff(nd),"hashrate_fmt":fmt_hashrate(estimate_hashrate(s,pd)),"confirmed":wb["confirmed"],"unconfirmed":wb["unconfirmed"],"confirmed_fmt":f"{wb['confirmed']:.8f}","unconfirmed_fmt":f"{wb['unconfirmed']:.8f}","wallet_loaded":wb["wallet_loaded"],"wallet_error":wb.get("wallet_error"),"blocks_found":int(s.get("blocks_found") or 0),"rewards_fmt":f"{float(s.get('block_rewards_total') or 0):.8f}","effort_pct":round(effort,3),"best_pct":round(100*best/nd,4) if nd and best else 0,"last_pct":round(100*last/nd,4) if nd and last else 0,"eta_fmt":fmt_duration(eta) if eta else "–","best_share_fmt":fmt_diff(best),"last_share_work_fmt":fmt_diff(last),"shares_ok":ok,"shares_bad":bad,"reject_pct":round(reject,1),"share_diff_fmt":fmt_diff(pd),"last_share_time":s.get("last_share_time"),"last_share_hash":s.get("last_share_hash"),"payout":holding,"addr_ok":bool(holding),"workers":s.get("workers") or {},"connections":connections,"rpc_ok":bool(info),"rpc_error":info_err,"recent_shares":list(reversed(s.get("recent_shares") or []))[:100],"blocks_log":list(reversed(mat))[:1000],"maturity_blocks":COINBASE_MATURITY,"round_height":round_height,"round_work":rw,"round_shares":s.get("round_shares") or 0,"tip_changed_at":s.get("tip_changed_at"),"tip_age":max(0,int(time.time())-tip_time),"network_eta":max(0,TARGET_BLOCK_SEC-(max(0,int(time.time())-tip_time)%TARGET_BLOCK_SEC)),"job_id":f"{job_height}:{prev[:12]}" if prev!="–" else "–","job_height":job_height,"job_prevhash":prev,"job_nbits":(gbt or {}).get("bits") or "–","job_ntime":(gbt or {}).get("curtime") or "–","job_version":(gbt or {}).get("version") or "–","ts":time.strftime("%Y-%m-%d %H:%M:%S"),"height_strip":[{"h":h,"short":str(h)[-3:].zfill(3),"found":h in found,"current":h==height} for h in range(max(0,height-11),height+1)]}
 @app.route("/")
-def index():return render_template("dashboard.html",**build_payload())
+def index():return render_template("dashboard_v2.html",**build_payload())
 @app.route("/api/status")
 def api_status():return jsonify(build_payload())
 @app.route("/api/health")
@@ -134,5 +125,16 @@ def api_health():r,_=rpc("getblockchaininfo");return jsonify({"ok":True,"rpc_ok"
 @app.route("/api/logs")
 def api_logs():
     s=merge_runtime_stats(load_stats(),parse_stratum_log());return jsonify({"events":load_events(),"snapshot":{"height":s.get("round_height"),"shares_ok":s.get("shares_ok",0),"shares_bad":s.get("shares_bad",0),"blocks_found":s.get("blocks_found",0),"round_effort_pct":s.get("round_effort_pct",0),"round_shares":s.get("round_shares",0),"best_share_diff":s.get("best_share_diff",0),"last_share_work":s.get("last_share_work",0)},"ts":time.strftime("%Y-%m-%d %H:%M:%S")})
+def load_events():
+    out=[]
+    try:
+        if EVENTS_PATH.exists():
+            for line in EVENTS_PATH.read_text(errors="replace").splitlines()[-500:]:
+                try:
+                    e=json.loads(line)
+                    if isinstance(e,dict):out.append(e)
+                except Exception:continue
+    except Exception:pass
+    return out
 if __name__=="__main__":
     mon=CFG.get("monitor") or {};app.run(host=mon.get("host","0.0.0.0"),port=int(mon.get("port",5050)),debug=False)
