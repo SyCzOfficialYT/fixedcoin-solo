@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""FixedCoin dashboard overlay: keep the FCH-style UI, make wallet/coinbase state authoritative."""
+"""FixedCoin dashboard overlay.
+
+Keeps the FreeCash dashboard data contract, but makes block/reward history
+wallet-authoritative so a real coinbase cannot disappear from the UI when
+stratum stats rotate/reset.
+"""
 from __future__ import annotations
 
 import sys
@@ -16,50 +21,67 @@ COINBASE_MATURITY = int(base.COINBASE_MATURITY)
 
 
 def wallet_coinbase_log(limit: int = 1000):
-    """Rebuild block history from the mining wallet, not from transient stratum stats."""
+    """Return our wallet's own coinbase rewards, including immature ones.
+
+    Bitcoin Core reports wallet coinbases as ``immature`` while they have
+    <=100 confirmations and ``generate`` once they are mature.  We deliberately
+    use the wallet as the source of truth instead of stratum.log/stats.json.
+    """
     txs, err = base.rpc("listtransactions", ["*", limit, 0, True])
     if not isinstance(txs, list):
         return [], err
 
-    payout = base.HOLDING
+    payout = str(base.HOLDING or "").strip()
     rows = {}
+
     for tx in txs:
         if not isinstance(tx, dict):
             continue
         category = str(tx.get("category") or "").lower()
-        if category not in {"immature", "generate"} and not tx.get("generated"):
+        generated = tx.get("generated")
+        if category not in {"immature", "generate"} and generated is not True:
             continue
-        if tx.get("generated") is False:
+        if category == "orphan":
             continue
-        if payout and tx.get("address") and tx.get("address") != payout:
+
+        address = str(tx.get("address") or "").strip()
+        if payout and address != payout:
+            # Do not accidentally count another wallet-owned coinbase output.
             continue
-        height = tx.get("blockheight")
-        if height is None:
-            continue
+
         try:
-            height = int(height)
+            height = int(tx.get("blockheight"))
             amount = float(tx.get("amount") or 0)
         except (TypeError, ValueError):
             continue
-        if height <= 0:
+        if height <= 0 or amount <= 0:
             continue
+
         txid = str(tx.get("txid") or "")
         blockhash = str(tx.get("blockhash") or "")
         key = txid or f"{height}:{blockhash}"
-        rows[key] = {
-            "ts": time.strftime(
-                "%Y-%m-%d %H:%M:%S",
-                time.gmtime(tx.get("blocktime") or tx.get("time") or time.time()),
-            ),
-            "height": height,
-            "hash": blockhash[:16] if blockhash else "–",
-            "txid": txid,
-            "reward": amount,
-            "address": payout,
-            "mature_at_height": height + COINBASE_MATURITY,
-            "confirmations": int(tx.get("confirmations") or 0),
-            "category": category,
-        }
+        row = rows.setdefault(
+            key,
+            {
+                "ts": time.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    time.gmtime(tx.get("blocktime") or tx.get("time") or time.time()),
+                ),
+                "height": height,
+                "hash": blockhash[:16] if blockhash else "–",
+                "txid": txid,
+                "reward": 0.0,
+                "address": payout or address,
+                "mature_at_height": height + COINBASE_MATURITY,
+                "confirmations": int(tx.get("confirmations") or 0),
+                "category": category,
+            },
+        )
+        row["reward"] += amount
+        row["confirmations"] = max(row["confirmations"], int(tx.get("confirmations") or 0))
+        if category == "generate":
+            row["category"] = "generate"
+
     return sorted(rows.values(), key=lambda x: (x["height"], x["txid"]), reverse=True), None
 
 
@@ -69,8 +91,11 @@ _original_build_payload = base.build_payload
 def build_payload():
     payload = _original_build_payload()
     wallet_blocks, wallet_error = wallet_coinbase_log()
-    if wallet_blocks:
-        # Wallet is the source of truth for an actually accepted coinbase.
+
+    # Only replace block history when the wallet RPC answered successfully.
+    # An empty successful wallet is authoritative too: it means there are no
+    # wallet coinbases, and prevents stale stratum history from being shown.
+    if wallet_error is None:
         payload["blocks_log"] = base.maturity_info(
             payload.get("height", 0), wallet_blocks
         )[:1000]
@@ -79,13 +104,17 @@ def build_payload():
         payload["wallet_blocks_error"] = None
         payload["rewards_fmt"] = f"{sum(float(x.get('reward') or 0) for x in wallet_blocks):.8f}"
     else:
-        payload["wallet_blocks_ok"] = wallet_error is None
+        payload["wallet_blocks_ok"] = False
         payload["wallet_blocks_error"] = wallet_error
+
+    # Keep an explicit wallet state for diagnostics without changing the UI.
+    payload["wallet_authoritative"] = wallet_error is None
     return payload
 
 
 # Flask handlers in monitor.app resolve build_payload through that module's globals.
 base.build_payload = build_payload
+
 
 if __name__ == "__main__":
     mon = base.CFG.get("monitor") or {}
