@@ -1,18 +1,18 @@
-# FixedCoin Solo Mining
+# Wird beim Container-Start automatisch als config.yaml erzeugt.
+# Optional: FIX_RPCPASS / eigene payout_address per Env oder nach erstem Boot überschreiben.
 rpc:
   host: "127.0.0.1"
   port: 24761
   user: "fixrpc"
-  password: "CHANGE_ME_SECURE_PASSWORD"
+  password: "FixedcoinSoloAutoRpc_ChangeMeIfPublic"
 
 pool:
-  payout_address: "fix1qYOUR_BECH32_ADDRESS_HERE"
+  payout_address: "fix1CHANGE_ME_GETNEWADDRESS"
   start_difficulty: 10000
   min_difficulty: 1000
   job_interval: 30
   stratum_host: "0.0.0.0"
   stratum_port: 3333
-  # Miner password: d=50000 for fixed diff, or empty/x for VarDiff
 
 monitor:
   host: "0.0.0.0"

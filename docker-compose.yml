@@ -9,11 +9,18 @@ services:
       - "24768:24768"
     volumes:
       - fix-data:/data
-      - ./config/config.yaml:/app/config/config.yaml:ro
+      # config.yaml wird im Container auto geschrieben (wie FreeCash)
+      # Optional Host-Override:
+      # - ./config/config.yaml:/app/config/config.yaml
     environment:
+      - FIX_DATADIR=/data/fixedcoin
+      - FIX_RPCUSER=fixrpc
+      - FIX_RPCPASS=FixedcoinSoloAutoRpc_ChangeMeIfPublic
+      - FIX_RPCPORT=24761
+      - FIX_P2PPORT=24768
+      - FIX_DASH_PORT=5050
       - STATS_PATH=/data/stats.json
       - EVENTS_PATH=/data/events.jsonl
-      - FIX_DATADIR=/data/fixedcoin
     shm_size: "1gb"
 
 volumes:
