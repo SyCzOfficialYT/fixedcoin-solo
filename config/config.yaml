@@ -1,4 +1,4 @@
-# FixedCoin Solo Mining – copy from config.example.yaml and edit
+# FixedCoin Solo – copy from config.example.yaml and edit
 rpc:
   host: "127.0.0.1"
   port: 24761
@@ -6,7 +6,7 @@ rpc:
   password: "CHANGE_ME_SECURE_PASSWORD"
 
 pool:
-  payout_address: "fix1qYOUR_BECH32_ADDRESS_HERE"
+  payout_address: "fix1qe60s2t5kdr5fugje4zs0djtgf7larsl8jhayq8"
   start_difficulty: 10000
   fixed_difficulty: 13354
   min_difficulty: 1000
