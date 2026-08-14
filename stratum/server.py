@@ -11,7 +11,26 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 FULL = HERE / "server_full.py"
 URL = "https://raw.githubusercontent.com/SyCzOfficialYT/freecash-coin/a88d89675b3a41cc6774e1b975e57e050d4892cc/stratum/server.py"
-ADAPT_VERSION = "fixedcoin-fch-dashboard-repair-2026-08-14-v3-segwit"
+ADAPT_VERSION = "fixedcoin-fch-dashboard-repair-2026-08-14-v4-segwit"
+
+
+def replace_function(t: str, name: str, replacement: str, next_name: str | None = None) -> str:
+    """Replace one top-level function without relying on fragile regex offsets."""
+    marker = f"def {name}("
+    start = t.find(marker)
+    if start < 0:
+        raise RuntimeError(f"{marker} not found")
+    if next_name:
+        end_marker = f"\ndef {next_name}("
+        end = t.find(end_marker, start)
+        if end < 0:
+            raise RuntimeError(f"end marker {end_marker!r} not found")
+    else:
+        m = re.search(r"\n(?=def [A-Za-z_]\w*\s*\()", t[start + len(marker):])
+        if not m:
+            raise RuntimeError(f"end of {marker} not found")
+        end = start + len(marker) + m.start()
+    return t[:start] + replacement.rstrip() + "\n" + t[end + 1:]
 
 
 def adapt(t: str) -> str:
@@ -37,14 +56,6 @@ def adapt(t: str) -> str:
         1,
     )
 
-    start_fixed = t.find("def parse_fixed_diff(")
-    if start_fixed < 0:
-        raise RuntimeError("parse_fixed_diff not found")
-    rest_fixed = t[start_fixed:]
-    m_fixed = re.search(r"\ndef [a-zA-Z_]", rest_fixed[1:])
-    if not m_fixed:
-        raise RuntimeError("end of parse_fixed_diff not found")
-    end_fixed = start_fixed + 1 + m_fixed.start()
     fixed_parser = '''def parse_fixed_diff(*candidates):
     """Explicit d=/diff= passwords select the configured FixedCoin difficulty."""
     for raw in candidates:
@@ -53,9 +64,8 @@ def adapt(t: str) -> str:
         if re.search(r"(?:^|[;,\\s])(?:d|diff)\\s*[=:]\\s*\\d+(?:\\.\\d+)?", raw, re.I):
             return FIXED_DIFF
     return None
-
 '''
-    t = t[:start_fixed] + fixed_parser + t[end_fixed:]
+    t = replace_function(t, "parse_fixed_diff", fixed_parser, "build_coinbase_parts")
 
     # Remove the FreeCash governance/dev output. FixedCoin pays the configured
     # holding address only; the block subsidy remains the miner's full value.
@@ -66,14 +76,6 @@ def adapt(t: str) -> str:
 
     # FixedCoin coinbase: one miner output plus the optional BIP141 witness
     # commitment output supplied by getblocktemplate.
-    start = t.find("def build_coinbase_parts(")
-    if start < 0:
-        raise RuntimeError("build_coinbase_parts not found")
-    rest = t[start:]
-    m = re.search(r"\ndef [a-zA-Z_]", rest[1:])
-    if not m:
-        raise RuntimeError("end of build_coinbase_parts not found")
-    end = start + 1 + m.start()
     single = '''def build_coinbase_parts(height, miner_value_sats, miner_spk, en1_size=4, en2_size=4, witness_commitment_hex=None, *args, **kwargs):
     """Single miner output + optional BIP141 witness commitment."""
     tag = b"/FIX-Solo/"
@@ -109,9 +111,8 @@ def coinbase_add_witness(tx_nowitness: bytes) -> bytes:
         return tx_nowitness
     witness = b"\\x01\\x20" + (b"\\x00" * 32)
     return version + b"\\x00\\x01" + rest + witness
-
 '''
-    t = t[:start] + single + t[end:]
+    t = replace_function(t, "build_coinbase_parts", single, "assemble_coinbase")
 
     # Adapt all coinbase call sites to the FixedCoin single-output builder and
     # pass the template witness commitment when available.
