@@ -14,7 +14,9 @@ sudo ./tools/deploy_ui.sh      # patches stratum (no DEV_ADDRESS), copies UI int
 ```
 
 Dashboard: **http://HOST:5050**  
-Stratum: **stratum+tcp://HOST:3333** · User `fix1….worker` · Pass `x` or `d=10000`
+Stratum: **stratum+tcp://HOST:3333** · User `fix1….worker` · Pass `x` or `d=13354`
+
+The solo stratum enforces the configured fixed share difficulty (`fixed_difficulty`, default **13354**) whenever the miner explicitly supplies a `d=` / `diff=` password. A stale miner password such as `d=13111` therefore cannot silently change the pool share target.
 
 `config/config.yaml` and payout `fix1…` are auto-created on first boot.
 

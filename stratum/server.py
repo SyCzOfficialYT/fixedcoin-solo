@@ -7,6 +7,7 @@ HERE = Path(__file__).resolve().parent
 FULL = HERE / "server_full.py"
 URL = "https://raw.githubusercontent.com/SyCzOfficialYT/freecash-coin/a88d89675b/stratum/server.py"
 
+
 def adapt(t: str) -> str:
     t = t.replace('job_interval", 20)', 'job_interval", 30)')
     t = t.replace("blog[-20:]", "blog[-1000:]")
@@ -20,6 +21,35 @@ def adapt(t: str) -> str:
     if old_gbt not in t:
         raise RuntimeError("getblocktemplate pattern missing")
     t = t.replace(old_gbt, new_gbt)
+
+    fixed_marker = 'MAX_DIFF = int(cfg["pool"].get("vardiff_max", 50_000_000))'
+    if fixed_marker not in t:
+        raise RuntimeError("vardiff_max pattern missing")
+    t = t.replace(
+        fixed_marker,
+        fixed_marker + '\nFIXED_DIFF = int(cfg["pool"].get("fixed_difficulty", 13354))',
+        1,
+    )
+
+    start_fixed = t.find("def parse_fixed_diff(")
+    if start_fixed < 0:
+        raise RuntimeError("parse_fixed_diff not found")
+    rest_fixed = t[start_fixed:]
+    m_fixed = re.search(r"\ndef [a-zA-Z_]", rest_fixed[1:])
+    if not m_fixed:
+        raise RuntimeError("end of parse_fixed_diff not found")
+    end_fixed = start_fixed + 1 + m_fixed.start()
+    fixed_parser = (
+        "def parse_fixed_diff(*candidates):\n"
+        "    \"\"\"Detect an explicit d=/diff= password and return the pool fixed diff.\"\"\"\n"
+        "    for raw in candidates:\n"
+        "        if not raw or not isinstance(raw, str):\n"
+        "            continue\n"
+        "        if re.search(r\"(?:^|[;,\\s])(?:d|diff)\\s*[=:]\\s*\\d+(?:\\.\\d+)?\", raw, re.I):\n"
+        "            return FIXED_DIFF\n"
+        "    return None\n\n"
+    )
+    t = t[:start_fixed] + fixed_parser + t[end_fixed:]
 
     start = t.find("def build_coinbase_parts(")
     if start < 0:
@@ -61,6 +91,7 @@ def adapt(t: str) -> str:
         t = t.replace(a, b, 1)
     return t
 
+
 if FULL.exists():
     FULL.unlink()
 print("Fetching stratum base…")
@@ -69,6 +100,7 @@ adapted = adapt(raw)
 ast.parse(adapted)
 assert "DEV_ADDRESS" not in adapted and "dev_spk" not in adapted
 assert '"segwit"' in adapted
+assert "FIXED_DIFF" in adapted
 FULL.write_text(adapted)
 print("Wrote", FULL, FULL.stat().st_size)
 sys.argv[0] = str(FULL)
