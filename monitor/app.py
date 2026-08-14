@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config" / "config.yaml"
-# Align with stratum default ROOT/data; env can override
 EVENTS_PATH = Path(os.environ.get("EVENTS_PATH", str(ROOT / "data" / "events.jsonl")))
 STRATUM_LOG = Path(os.environ.get("STRATUM_LOG", str(ROOT / "data" / "stratum.log")))
 STATS_PATH = Path(os.environ.get("STATS_PATH", str(ROOT / "data" / "stats.json")))
@@ -75,7 +74,6 @@ def load_events(limit=120):
             out.append(json.loads(raw))
         except Exception:
             out.append({"ts": "", "level": "INFO", "msg": raw})
-    # also parse stratum log ACCEPT lines if events thin
     if len(out) < 5:
         for raw in read_tail_lines(STRATUM_LOG, 80):
             if "ACCEPT" in raw or "BLOCK" in raw or "ERROR" in raw:
@@ -162,8 +160,7 @@ def maturity_info(height, blocks_log):
     return mat
 
 def wallet_balances():
-    confirmed = unconfirmed = 0.0
-    for method, key in (("getbalances", None), ("getwalletinfo", None)):
+    for method in ("getbalances", "getwalletinfo"):
         res, err = rpc(method)
         if not res:
             continue
@@ -186,9 +183,6 @@ def build_payload():
     height = int(tip.get("blocks") or stats.get("round_height") or 0)
     headers = int(tip.get("headers") or height)
     difficulty = float(tip.get("difficulty") or stats.get("network_diff") or 0)
-    hr, _ = rpc("getnetworkhashps", [120, height]) if height else (0, None)
-    if hr is None:
-        hr = 0
     connections = int((net or {}).get("connections") or 0)
     synced = (not tip.get("initialblockdownload", True)) and height >= headers - 1
 
@@ -205,7 +199,33 @@ def build_payload():
         effort = 100.0 * float(stats["round_work"]) / net_d
     best_pct = (100.0 * best / net_d) if net_d and best else 0.0
     last_pct = (100.0 * last_work / net_d) if net_d and last_work else 0.0
-    eta = (net_d / last_work * TARGET_BLOCK_SEC) if last_work and net_d else None
+    eta = (net_d / max(last_work, 1e-12) * TARGET_BLOCK_SEC) if last_work and net_d else None
+
+    # Miner hashrate from shares (NOT network hashrate).
+    # H = sum(share_diff) * 2^32 / seconds
+    hr = 0.0
+    recent = list(stats.get("recent_shares") or [])
+    if recent:
+        times = []
+        work = 0.0
+        for s in recent:
+            try:
+                work += float(s.get("work") or s.get("diff") or share_diff or 0)
+            except Exception:
+                pass
+            ts = _parse_ts(s.get("ts") or s.get("time") or "")
+            if ts:
+                times.append(ts)
+        if len(times) >= 2 and work > 0:
+            span = (max(times) - min(times)).total_seconds()
+            if span < 1:
+                span = 1.0
+            span += span / max(len(times) - 1, 1)
+            hr = work * (2 ** 32) / span
+        elif work > 0 and share_diff:
+            hr = float(share_diff) * (2 ** 32) / 5.0
+    if not hr and share_diff:
+        hr = float(share_diff) * (2 ** 32) / 10.0
 
     wbal = wallet_balances()
     holding = HOLDING or stats.get("payout") or ""
