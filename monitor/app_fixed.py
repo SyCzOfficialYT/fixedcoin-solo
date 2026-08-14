@@ -19,12 +19,20 @@ from monitor import app as base
 
 COINBASE_MATURITY = int(base.COINBASE_MATURITY)
 
+# Never let the browser keep an older dashboard HTML/JSON response around.
+@base.app.after_request
+def no_dashboard_cache(response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
 
 def wallet_coinbase_log(limit: int = 1000):
     """Return our wallet's own coinbase rewards, including immature ones.
 
     Bitcoin Core reports wallet coinbases as ``immature`` while they have
-    <=100 confirmations and ``generate`` once they are mature.  We deliberately
+    <=100 confirmations and ``generate`` once they are mature. We deliberately
     use the wallet as the source of truth instead of stratum.log/stats.json.
     """
     txs, err = base.rpc("listtransactions", ["*", limit, 0, True])
@@ -46,7 +54,6 @@ def wallet_coinbase_log(limit: int = 1000):
 
         address = str(tx.get("address") or "").strip()
         if payout and address != payout:
-            # Do not accidentally count another wallet-owned coinbase output.
             continue
 
         try:
@@ -92,9 +99,6 @@ def build_payload():
     payload = _original_build_payload()
     wallet_blocks, wallet_error = wallet_coinbase_log()
 
-    # Only replace block history when the wallet RPC answered successfully.
-    # An empty successful wallet is authoritative too: it means there are no
-    # wallet coinbases, and prevents stale stratum history from being shown.
     if wallet_error is None:
         payload["blocks_log"] = base.maturity_info(
             payload.get("height", 0), wallet_blocks
@@ -107,7 +111,6 @@ def build_payload():
         payload["wallet_blocks_ok"] = False
         payload["wallet_blocks_error"] = wallet_error
 
-    # Keep an explicit wallet state for diagnostics without changing the UI.
     payload["wallet_authoritative"] = wallet_error is None
     return payload
 
