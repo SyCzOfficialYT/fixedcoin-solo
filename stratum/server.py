@@ -11,6 +11,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 FULL = HERE / "server_full.py"
 URL = "https://raw.githubusercontent.com/SyCzOfficialYT/freecash-coin/a88d89675b/stratum/server.py"
+ADAPT_VERSION = "fixedcoin-fch-dashboard-repair-2026-08-14-v2"
 
 
 def adapt(t: str) -> str:
@@ -30,11 +31,7 @@ def adapt(t: str) -> str:
     fixed_marker = 'MAX_DIFF = int(cfg["pool"].get("vardiff_max", 50_000_000))'
     if fixed_marker not in t:
         raise RuntimeError("vardiff_max pattern missing")
-    t = t.replace(
-        fixed_marker,
-        fixed_marker + '\nFIXED_DIFF = int(cfg["pool"].get("fixed_difficulty", 13354))',
-        1,
-    )
+    t = t.replace(fixed_marker, fixed_marker + '\nFIXED_DIFF = int(cfg["pool"].get("fixed_difficulty", 13354))', 1)
 
     start_fixed = t.find("def parse_fixed_diff(")
     if start_fixed < 0:
@@ -46,24 +43,23 @@ def adapt(t: str) -> str:
     end_fixed = start_fixed + 1 + m_fixed.start()
     fixed_parser = (
         "def parse_fixed_diff(*candidates):\n"
-        "    \"\"\"Parse an explicitly requested miner difficulty from password/worker.\"\"\"\n"
+        "    \"\"\"Explicit d=/diff= passwords select the configured pool fixed difficulty.\"\"\"\n"
         "    for raw in candidates:\n"
         "        if not raw or not isinstance(raw, str):\n"
         "            continue\n"
-        "        m = re.search(r\"(?:^|[;,\\s])(?:d|diff)\\s*[=:]\\s*(\\d+(?:\\.\\d+)?)\", raw, re.I)\n"
-        "        if not m:\n"
-        "            m = re.match(r\"^(?:d|diff)\\s*[=:]\\s*(\\d+(?:\\.\\d+)?)$\", raw.strip(), re.I)\n"
-        "        if not m:\n"
-        "            continue\n"
-        "        try:\n"
-        "            d = float(m.group(1))\n"
-        "        except (TypeError, ValueError):\n"
-        "            continue\n"
-        "        if 16 <= d <= MAX_DIFF:\n"
-        "            return int(round(d))\n"
+        "        if re.search(r\"(?:^|[;,\\s])(?:d|diff)\\s*[=:]\\s*\\d+(?:\\.\\d+)?\", raw, re.I):\n"
+        "            return FIXED_DIFF\n"
         "    return None\n\n"
     )
     t = t[:start_fixed] + fixed_parser + t[end_fixed:]
+
+    replacements = (
+        ('build_coinbase_parts(\n            job["height"], job["value"], job["spk"], job["dev_spk"],', 'build_coinbase_parts(\n            job["height"], job["value"], job["spk"],'),
+        ('build_coinbase_parts(\n            job["height"], job["value"], job["spk"], job["dev_spk"])', 'build_coinbase_parts(\n            job["height"], job["value"], job["spk"])'),
+        ('build_coinbase_parts(job["height"], job["value"], job["spk"], job["dev_spk"]', 'build_coinbase_parts(job["height"], job["value"], job["spk"]'),
+    )
+    for a, b in replacements:
+        t = t.replace(a, b)
 
     start = t.find("def build_coinbase_parts(")
     if start < 0:
@@ -88,19 +84,10 @@ def adapt(t: str) -> str:
     )
     t = t[:start] + single + t[end:]
 
-    t = "\n".join(
-        ln for ln in t.splitlines()
-        if "DEV_ADDRESS" not in ln and "dev_spk" not in ln
-    ) + "\n"
+    t = "\n".join(ln for ln in t.splitlines() if "DEV_ADDRESS" not in ln and "dev_spk" not in ln) + "\n"
 
     a = "if job is not None and clean:\n                broadcast_job(clean=True)"
-    b = (
-        "if job is not None:\n"
-        "                if clean:\n"
-        "                    broadcast_job(clean=True)\n"
-        "                else:\n"
-        "                    broadcast_job(clean=False)"
-    )
+    b = "if job is not None:\n                if clean:\n                    broadcast_job(clean=True)\n                else:\n                    broadcast_job(clean=False)"
     if a in t:
         t = t.replace(a, b, 1)
     return t
@@ -114,17 +101,16 @@ def generate_server() -> None:
     assert "DEV_ADDRESS" not in adapted and "dev_spk" not in adapted
     assert '"segwit"' in adapted
     assert "FIXED_DIFF" in adapted
-    FULL.write_text(adapted)
+    assert 'job["dev_spk"]' not in adapted
+    FULL.write_text(f"# ADAPT_VERSION={ADAPT_VERSION}\n" + adapted)
     print("Wrote", FULL, FULL.stat().st_size, flush=True)
 
 
-# Docker image builds call this once. Runtime NEVER needs the GitHub/raw URL.
 if os.environ.get("STRATUM_BUILD_ONLY") == "1":
     generate_server()
     raise SystemExit(0)
 
-# Keep the generated server. Runtime startup is local and does not fetch GitHub.
-if not FULL.exists() or FULL.stat().st_size < 1000:
+if not FULL.exists() or FULL.stat().st_size < 1000 or ADAPT_VERSION not in FULL.read_text(errors="ignore"):
     generate_server()
 
 sys.argv[0] = str(FULL)
