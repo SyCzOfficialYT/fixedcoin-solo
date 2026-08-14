@@ -14,10 +14,10 @@ def adapt(t: str) -> str:
     t = t.replace(" FCH", " FIX")
     t = t.replace("FreeCash", "FixedCoin")
     t = t.replace("/FCH-Solo/", "/FIX-Solo/")
-    t = re.sub(r"^DEV_ADDRESS\s*=.*\n", "", t, flags=re.M)
-    t = "\n".join(ln for ln in t.splitlines() if "DEV_ADDRESS" not in ln) + "\n"
-    t = re.sub(r"^\s*self\.dev_spk\s*=.*\n", "", t, flags=re.M)
-    t = t.replace(", self.dev_spk", "")
+    t = "\n".join(
+        ln for ln in t.splitlines()
+        if "DEV_ADDRESS" not in ln and "self.dev_spk" not in ln and "dev_spk" not in ln
+    ) + "\n"
 
     start = t.find("def build_coinbase_parts(")
     if start < 0:
@@ -60,7 +60,7 @@ print("Fetching stratum base…")
 raw = urllib.request.urlopen(URL, timeout=60).read().decode()
 adapted = adapt(raw)
 ast.parse(adapted)
-assert "DEV_ADDRESS" not in adapted
+assert "DEV_ADDRESS" not in adapted and "dev_spk" not in adapted
 FULL.write_text(adapted)
 print("Wrote", FULL, FULL.stat().st_size)
 sys.argv[0] = str(FULL)

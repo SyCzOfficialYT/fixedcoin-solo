@@ -25,40 +25,21 @@ t = t.replace(" FCH", " FIX")
 t = t.replace("FreeCash", "FixedCoin")
 t = t.replace("/FCH-Solo/", "/FIX-Solo/")
 
-# Drop DEV_ADDRESS completely
-t = re.sub(r"^DEV_ADDRESS\s*=.*\n", "", t, flags=re.M)
-lines = [ln for ln in t.splitlines() if "DEV_ADDRESS" not in ln]
-t = "\n".join(lines) + "\n"
-t = re.sub(r"^\s*self\.dev_spk\s*=.*\n", "", t, flags=re.M)
-t = t.replace(", self.dev_spk", "")
+# Drop every line that mentions DEV_ADDRESS or self.dev_spk
+t = "\n".join(
+    ln for ln in t.splitlines()
+    if "DEV_ADDRESS" not in ln and "self.dev_spk" not in ln and "dev_spk" not in ln
+) + "\n"
 
-# Replace build_coinbase_parts with single-output version
 start = t.find("def build_coinbase_parts(")
 if start < 0:
     raise SystemExit("build_coinbase_parts not found")
 rest = t[start:]
-# next top-level def after this one
 m = re.search(r"\ndef [a-zA-Z_]", rest[1:])
 if not m:
     raise SystemExit("end of build_coinbase_parts not found")
 end = start + 1 + m.start()
 
-single = '''def build_coinbase_parts(height, miner_value_sats, miner_spk, en1_size=4, en2_size=4, *args, **kwargs):
-    tag = b"/FIX-Solo/"
-    height_script = bip34_height(height)
-    scriptsig_len = len(height_script) + en1_size + en2_size + len(tag)
-    part1 = struct.pack("<I", 2) + b"\\x01" + b"\\x00" * 32 + struct.pack("<I", 0xFFFFFFFF)
-    part1 += encode_varint(scriptsig_len) + height_script
-    part2 = tag + struct.pack("<I", 0xFFFFFFFF) + b"\\x01"
-    part2 += struct.pack("<Q", int(miner_value_sats))
-    part2 += encode_varint(len(miner_spk)) + miner_spk
-    part2 += struct.pack("<I", 0)
-    return binascii.hexlify(part1).decode(), binascii.hexlify(part2).decode()
-
-'''
-# Fix escapes: we need real \\x in source written as \x for Python bytes
-single = single.replace("b\"\\\\x01\"", 'b"\\x01"').replace("b\"\\\\x00\"", 'b"\\x00"')
-# simpler: build without escape hell
 single = (
     "def build_coinbase_parts(height, miner_value_sats, miner_spk, en1_size=4, en2_size=4, *args, **kwargs):\n"
     "    tag = b'/FIX-Solo/'\n"
@@ -88,6 +69,7 @@ if a in t:
 
 ast.parse(t)
 assert "DEV_ADDRESS" not in t
+assert "dev_spk" not in t
 assert "blog[-1000:]" in t
 p.write_text(t)
 print("server OK (FIX single-out)")
