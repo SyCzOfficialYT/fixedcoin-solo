@@ -32,7 +32,6 @@ if old_gbt not in t:
 t = t.replace(old_gbt, new_gbt)
 print("gbt segwit OK")
 
-# Call sites: drop dev_spk arg BEFORE stripping lines
 for a, b in [
     (
         'build_coinbase_parts(\n            job["height"], job["value"], job["spk"], job["dev_spk"],\n            len(self.en1), self.en2_size,\n        )',
@@ -47,7 +46,6 @@ for a, b in [
         t = t.replace(a, b)
         print("call site patched")
 
-# Store witness commitment on job dict
 old_job = '"other_tx": other_tx, "created": time.time(),'
 new_job = (
     '"other_tx": other_tx, "created": time.time(),\n'
@@ -95,7 +93,6 @@ def coinbase_add_witness(tx_nowitness: bytes) -> bytes:
     if len(tx_nowitness) < 10:
         return tx_nowitness
     version, rest = tx_nowitness[:4], tx_nowitness[4:]
-    # already witness?
     if len(rest) >= 2 and rest[0] == 0 and rest[1] == 1:
         return tx_nowitness
     witness = b"\x01\x20" + (b"\x00" * 32)
@@ -104,14 +101,12 @@ def coinbase_add_witness(tx_nowitness: bytes) -> bytes:
 '''
 t = t[:start] + single + t[end:]
 
-# Block assembly must use witness-serialized coinbase for submitblock
 old_block = "block = header + encode_varint(tx_count) + coinbase_tx"
 new_block = "block = header + encode_varint(tx_count) + coinbase_add_witness(coinbase_tx)"
 if old_block in t:
     t = t.replace(old_block, new_block, 1)
     print("submitblock witness OK")
 
-# Drop DEV / dual-output leftovers
 t = "\n".join(
     ln for ln in t.splitlines()
     if "DEV_ADDRESS" not in ln and "dev_spk" not in ln
@@ -142,17 +137,19 @@ PY
 
 printf '%s\n' "==> Prepare monitor app"
 cp -f monitor/app.py "$TMP_DIR/app.py"
+cp -f monitor/app_fixed.py "$TMP_DIR/app_fixed.py"
 
 printf '%s\n' "==> Check dashboard"
 test -f monitor/templates/dashboard.html || python3 tools/patch_dashboard.py
 if [ -f tools/patch_timebar.py ]; then
   python3 tools/patch_timebar.py monitor/templates/dashboard.html || true
 fi
-grep -E "Live Competition|heightStrip" monitor/templates/dashboard.html >/dev/null
+grep -E "Live Competition|heightStrip|Share / Difficulty History" monitor/templates/dashboard.html >/dev/null
 
 printf '%s\n' "==> Copy into $CONTAINER"
 sudo docker cp "$TMP_DIR/server.py" "$CONTAINER:/app/stratum/server.py"
 sudo docker cp "$TMP_DIR/app.py" "$CONTAINER:/app/monitor/app.py"
+sudo docker cp "$TMP_DIR/app_fixed.py" "$CONTAINER:/app/monitor/app_fixed.py"
 sudo docker cp monitor/templates/dashboard.html "$CONTAINER:/app/monitor/templates/dashboard.html"
 sudo docker exec "$CONTAINER" mkdir -p /app/tools
 if [ -f tools/rebuild_blocks_log.py ]; then
@@ -160,7 +157,13 @@ if [ -f tools/rebuild_blocks_log.py ]; then
 fi
 sudo docker exec "$CONTAINER" rm -f /app/stratum/server_full.py 2>/dev/null || true
 
-# Prefer stratum-only restart so node keeps running
+# Restart only the supervised children. The node keeps syncing; the dashboard
+# supervisor automatically respawns app_fixed.py after its child is killed.
+if sudo docker exec "$CONTAINER" test -f /tmp/dashboard.pid; then
+  echo "==> Restart dashboard only"
+  sudo docker exec "$CONTAINER" sh -c 'kill $(cat /tmp/dashboard.pid) 2>/dev/null || true'
+  sleep 2
+fi
 if sudo docker exec "$CONTAINER" test -f /tmp/stratum.pid; then
   echo "==> Restart stratum only"
   sudo docker exec "$CONTAINER" sh -c 'kill $(cat /tmp/stratum.pid) 2>/dev/null || true'
