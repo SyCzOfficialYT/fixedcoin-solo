@@ -17,6 +17,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . /app
+
+# Build the generated/adapted stratum once. Runtime startup is fully local and
+# no longer depends on GitHub/raw.githubusercontent.com being reachable.
+RUN STRATUM_BUILD_ONLY=1 python3 /app/stratum/server.py
+
 RUN chmod +x /app/docker/entrypoint.sh
 
 ENV FIX_DATADIR=/data/fixedcoin
