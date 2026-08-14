@@ -5,7 +5,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ARG FIX_VER=29.1.3
-ARG FCH_DASHBOARD_COMMIT=60035d9839734218aa72d7e65cb4d8db30a9d3f2
+# This is the exact full FreeCash dashboard revision that contains the live
+# shares, live competition, block history/maturity view and CLI terminal.
+ARG FCH_DASHBOARD_COMMIT=a3016f07fc36f9e25d86c4f825f9185859bae17b
 RUN mkdir -p /opt/fixedcoin \
  && curl -fsSL -o /tmp/fix.tgz \
     "https://github.com/Fixed-Blockchain/fixedcoin/releases/download/v${FIX_VER}/fixedcoin-${FIX_VER}-x86_64-linux-gnu.tar.gz" \
@@ -19,8 +21,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . /app
 
-# Exact NEW-FCH dashboard source. Only the coin label and maturity wording are
-# adapted; the layout, CSS, live shares, blocks and terminal remain the source UI.
+# Install the exact FreeCash UI revision into the FixedCoin image.
+# Only presentation labels are adapted: FCH -> FIX. All layout, CSS,
+# Live Competition, Live Shares, Blocks/Maturity and CLI Terminal stay intact.
 RUN curl -fsSL \
     "https://raw.githubusercontent.com/SyCzOfficialYT/freecash-coin/${FCH_DASHBOARD_COMMIT}/monitor/templates/dashboard.html" \
     -o /app/monitor/templates/dashboard.html \
@@ -28,25 +31,32 @@ RUN curl -fsSL \
 from pathlib import Path
 p=Path('/app/monitor/templates/dashboard.html')
 s=p.read_text()
-s=s.replace('FCH Solo • Dashboard','FIX Solo • Dashboard')
-s=s.replace('<span>FCH</span> Solo Node','<span>FIX</span> Solo Node')
-s=s.replace('mature FCH','mature FIX').replace(' FCH',' FIX').replace('FCH Solo','FIX Solo')
-s=s.replace('~10 Tage / 14400 Blöcke','{{ maturity_blocks }} Blöcke').replace('14400 Blöcke (~10 Tage)','{{ maturity_blocks }} Blöcke')
-s=s.replace('{{ maturity_blocks }} Blöcke (~10 Tage)','{{ maturity_blocks }} Blöcke')
+s=s.replace('FCH Solo','FIX Solo').replace('FCH','FIX')
+# Keep FixedCoin's actual coinbase maturity (100 blocks), never inherit FCH's old value.
+s=s.replace('14400','{{ maturity_blocks }}')
+assert 'Live Shares' in s
+assert 'Blocks · Coinbase maturity countdown' in s
+assert 'CLI Terminal' in s
+assert 'Live Competition' in s
+assert 'FCH' not in s
 p.write_text(s)
-assert len(s)==17311 or len(s) > 16000
-assert 'Live Shares' in s and 'Gefundene Blöcke' in s and 'CLI Terminal' in s
-assert '14400' not in s
-print('NEW-FCH dashboard installed:',len(s),'bytes')
+print('Exact FreeCash dashboard installed:', len(s), 'bytes')
 PY
 
 RUN STRATUM_BUILD_ONLY=1 python3 /app/stratum/server.py \
  && python3 - <<'PY'
 from pathlib import Path
-p=Path('/app/stratum/server_full.py'); s=p.read_text(); new='rpc("getblocktemplate", [{"rules": ["segwit"]}])'
-for old in ('rpc("getblocktemplate", [{"rules": []}])','rpc("getblocktemplate", [])'): s=s.replace(old,new)
+p=Path('/app/stratum/server_full.py'); s=p.read_text()
+# FixedCoin Core requires BIP145/SegWit GBT negotiation.
+for old in (
+    'rpc("getblocktemplate", [{"rules": []}])',
+    'rpc("getblocktemplate", [])',
+):
+    s=s.replace(old, 'rpc("getblocktemplate", [{"rules": ["segwit"]}])')
 for line in s.splitlines():
-    if 'getblocktemplate' in line and 'segwit' not in line: raise SystemExit(f'unsafe GBT call remains: {line}')
+    if 'getblocktemplate' in line and 'rules": ["segwit"]' not in line:
+        raise SystemExit(f'unsafe GBT call remains: {line}')
+# -10 is a normal Core initial-sync state, not a broken RPC endpoint.
 old='''def rpc(method, params=None):
     try:
         r = requests.post(
@@ -64,7 +74,7 @@ old='''def rpc(method, params=None):
         log.error("RPC %s: %s", method, e)
         return None
 '''
-newrpc='''def rpc(method, params=None):
+new='''def rpc(method, params=None):
     try:
         r = requests.post(
             f"http://{RPC_HOST}:{RPC_PORT}",
@@ -73,19 +83,23 @@ newrpc='''def rpc(method, params=None):
         )
         data = r.json()
         if data.get("error"):
-            err=data["error"]; code=err.get("code") if isinstance(err,dict) else None
+            err = data["error"]
+            code = err.get("code") if isinstance(err, dict) else None
             if method == "getblocktemplate" and code == -10:
                 log.warning("RPC getblocktemplate: node still syncing (-10); waiting for chain tip")
             else:
-                log.error("RPC %s: %s",method,err)
+                log.error("RPC %s: %s", method, err)
             return None
         if not r.ok:
-            log.error("RPC %s: HTTP %s",method,r.status_code); return None
+            log.error("RPC %s: HTTP %s", method, r.status_code)
+            return None
         return data.get("result")
     except Exception as e:
-        log.error("RPC %s: %s",method,e); return None
+        log.error("RPC %s: %s", method, e)
+        return None
 '''
-if old not in s: raise SystemExit('RPC helper changed; refusing unsafe Docker patch')
+if old not in s:
+    raise SystemExit('RPC helper shape changed; refusing to apply unsafe patch')
 p.write_text(s.replace(old,new,1))
 print('GBT/RPC verification: OK')
 PY
