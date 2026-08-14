@@ -10,25 +10,21 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 FULL = HERE / "server_full.py"
 URL = "https://raw.githubusercontent.com/SyCzOfficialYT/freecash-coin/a88d89675b3a41cc6774e1b975e57e050d4892cc/stratum/server.py"
-ADAPT_VERSION = "fixedcoin-fch-dashboard-repair-2026-08-14-v5-ast-safe"
+ADAPT_VERSION = "fixedcoin-fch-dashboard-repair-2026-08-14-v6-gbt-safe"
 
 
 def replace_function(source: str, name: str, replacement: str) -> str:
-    """Replace a top-level Python function using the AST, not a signature regex."""
     tree = ast.parse(source)
     target = next((n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name), None)
     if target is None:
         raise RuntimeError(f"function {name!r} not found in FreeCash base")
-
     lines = source.splitlines(keepends=True)
     start = sum(len(x) for x in lines[:target.lineno - 1])
-    end_line = target.end_lineno
-    end = sum(len(x) for x in lines[:end_line])
+    end = sum(len(x) for x in lines[:target.end_lineno])
     return source[:start] + replacement.rstrip() + "\n" + source[end:]
 
 
 def adapt(t: str) -> str:
-    # FixedCoin network/pool settings.
     t = t.replace('job_interval", 20)', 'job_interval", 30)')
     t = t.replace("blog[-20:]", "blog[-1000:]")
     t = t.replace("+ 14400", "+ 100")
@@ -36,14 +32,11 @@ def adapt(t: str) -> str:
     t = t.replace("FreeCash", "FixedCoin")
     t = t.replace("/FCH-Solo/", "/FIX-Solo/")
 
-    # The FixedCoin daemon exposes SegWit block templates.  Do not silently
-    # fall back to a legacy template: the coinbase must commit to the witness
-    # commitment supplied by getblocktemplate.
-    old_gbt = 'rpc("getblocktemplate", [{"rules": []}]) or rpc("getblocktemplate", [])'
-    new_gbt = 'rpc("getblocktemplate", [{"rules": ["segwit"]}])'
-    if old_gbt not in t:
-        raise RuntimeError("getblocktemplate pattern missing")
-    t = t.replace(old_gbt, new_gbt, 1)
+    # Keep the known-good FreeCash GBT request. FixedCoin's daemon currently
+    # rejects an explicit ["segwit"] request with HTTP 500. If the template
+    # contains default_witness_commitment, witness handling is data-driven.
+    if 'rpc("getblocktemplate", [{"rules": []}]) or rpc("getblocktemplate", [])' not in t:
+        raise RuntimeError("known-good getblocktemplate call missing")
 
     fixed_marker = 'MAX_DIFF = int(cfg["pool"].get("vardiff_max", 50_000_000))'
     if fixed_marker not in t:
@@ -68,11 +61,8 @@ def adapt(t: str) -> str:
 '''
     t = replace_function(t, "parse_fixed_diff", fixed_parser)
 
-    # Replace the FreeCash 2-output coinbase with a FixedCoin miner-only
-    # coinbase.  Keep the old call signature compatible: the old dev_spk
-    # argument is accepted and deliberately ignored.
     single = '''def build_coinbase_parts(height, miner_value_sats, miner_spk, dev_spk=None, en1_size=4, en2_size=4, witness_commitment_hex=None, *args, **kwargs):
-    """Build a FixedCoin coinbase: full subsidy to miner + optional witness commitment output."""
+    """Build a FixedCoin coinbase with the full subsidy to the payout address."""
     tag = b"/FIX-Solo/"
     height_script = bip34_height(height)
     scriptsig_len = len(height_script) + en1_size + en2_size + len(tag)
@@ -98,8 +88,6 @@ def adapt(t: str) -> str:
 '''
     t = replace_function(t, "build_coinbase_parts", single)
 
-    # Store the template's witness commitment alongside the job.  The old
-    # FreeCash job structure remains otherwise intact for dashboard/stat code.
     old_job = '"other_tx": other_tx, "created": time.time(),'
     new_job = (
         '"other_tx": other_tx, "created": time.time(),\n'
@@ -109,10 +97,6 @@ def adapt(t: str) -> str:
         raise RuntimeError("job witness insertion point missing")
     t = t.replace(old_job, new_job, 1)
 
-    # Existing FreeCash call sites pass dev_spk as the fourth argument.  The
-    # compatible FixedCoin builder ignores that value, so no fragile call-site
-    # rewriting is required.  Add the witness commitment to calls that already
-    # provide the complete job object by replacing the common multiline call.
     old_call = '''build_coinbase_parts(
             job["height"], job["value"], job["spk"], job["dev_spk"],
             len(self.en1), self.en2_size,
@@ -124,33 +108,34 @@ def adapt(t: str) -> str:
         )'''
     if old_call in t:
         t = t.replace(old_call, new_call, 1)
-
-    # If the base has a compact one-line call, preserve compatibility but pass
-    # the witness commitment when possible.
     t = t.replace(
         'build_coinbase_parts(job["height"], job["value"], job["spk"], job["dev_spk"]',
         'build_coinbase_parts(job["height"], job["value"], job["spk"], job.get("dev_spk")',
     )
 
-    # A coinbase's txid is calculated from the transaction without witness
-    # data.  The final block, however, must serialize the coinbase witness
-    # reserved value when the template contains a witness commitment.
-    old_block = "block = header + encode_varint(tx_count) + coinbase_tx"
-    new_block = "block = header + encode_varint(tx_count) + coinbase_add_witness(coinbase_tx)"
-    if old_block in t and "def coinbase_add_witness" not in t:
-        witness_helper = '''def coinbase_add_witness(tx_nowitness: bytes) -> bytes:
-    """Serialize the BIP141 coinbase witness reserved value."""
-    if len(tx_nowitness) < 6:
+    witness_helper = '''def coinbase_add_witness(tx_nowitness: bytes, enabled: bool) -> bytes:
+    """Serialize the BIP141 coinbase witness reserved value correctly."""
+    if not enabled or len(tx_nowitness) < 8:
         return tx_nowitness
-    # The coinbase built above is deliberately non-segwit. Insert marker/flag
-    # after the 4-byte version, then append one 32-byte witness item.
-    return tx_nowitness[:4] + b"\\x00\\x01" + tx_nowitness[4:] + b"\\x01\\x20" + (b"\\x00" * 32)
+    if tx_nowitness[4:6] == b"\\x00\\x01":
+        return tx_nowitness
+    version = tx_nowitness[:4]
+    body = tx_nowitness[4:-4]
+    locktime = tx_nowitness[-4:]
+    witness = b"\\x01\\x20" + (b"\\x00" * 32)
+    return version + b"\\x00\\x01" + body + witness + locktime
 '''
+    if "def coinbase_add_witness" in t:
+        t = replace_function(t, "coinbase_add_witness", witness_helper)
+    else:
         t = t.replace("\ndef assemble_coinbase(", "\n" + witness_helper + "\ndef assemble_coinbase(", 1)
-        t = t.replace(old_block, new_block, 1)
 
-    # Always broadcast job refreshes; clean jobs remain clean while non-clean
-    # refreshes are also delivered to miners.
+    old_block = "block = header + encode_varint(tx_count) + coinbase_tx"
+    new_block = "block = header + encode_varint(tx_count) + coinbase_add_witness(coinbase_tx, bool(job.get(\"witness_commitment\")))"
+    if old_block not in t:
+        raise RuntimeError("submitblock insertion point missing")
+    t = t.replace(old_block, new_block, 1)
+
     old_broadcast = "if job is not None and clean:\n                broadcast_job(clean=True)"
     new_broadcast = (
         "if job is not None:\n"
@@ -173,7 +158,6 @@ def generate_server() -> None:
     assert "FIXED_DIFF" in adapted
     assert "witness_commitment" in adapted
     assert "coinbase_add_witness" in adapted
-    assert 'job["dev_spk"]' not in adapted or "build_coinbase_parts" in adapted
     FULL.write_text(f"# ADAPT_VERSION={ADAPT_VERSION}\n" + adapted)
     print("Wrote", FULL, FULL.stat().st_size, flush=True)
 
