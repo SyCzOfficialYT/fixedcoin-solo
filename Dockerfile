@@ -5,7 +5,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ARG FIX_VER=29.1.3
-ARG FCH_DASHBOARD_COMMIT=b73f888c7a154015056cdce765fe79dda1a20215
+# Exact dashboard blob from freecash-coin/NEW-FCH.
+ARG FCH_DASHBOARD_COMMIT=60035d9839734218aa72d7e65cb4d8db30a9d3f2
 RUN mkdir -p /opt/fixedcoin \
  && curl -fsSL -o /tmp/fix.tgz \
     "https://github.com/Fixed-Blockchain/fixedcoin/releases/download/v${FIX_VER}/fixedcoin-${FIX_VER}-x86_64-linux-gnu.tar.gz" \
@@ -19,14 +20,17 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . /app
 
-# The monitor UI must be byte-for-byte the current dashboard from
-# freecash-coin/NEW-FCH. The Flask app only adapts the coin label/data at runtime.
+# This is the actual NEW-FCH dashboard blob, not a reconstructed/legacy UI.
 RUN curl -fsSL \
     "https://raw.githubusercontent.com/SyCzOfficialYT/freecash-coin/${FCH_DASHBOARD_COMMIT}/monitor/templates/dashboard.html" \
     -o /app/monitor/templates/dashboard.html \
- && test "$(wc -c < /app/monitor/templates/dashboard.html)" -eq 17311
+ && test "$(wc -c < /app/monitor/templates/dashboard.html)" -eq 17311 \
+ && grep -q '<title>FCH Solo • Dashboard</title>' /app/monitor/templates/dashboard.html \
+ && grep -q 'Live Shares' /app/monitor/templates/dashboard.html \
+ && grep -q 'Gefundene Blöcke' /app/monitor/templates/dashboard.html \
+ && grep -q 'CLI Terminal' /app/monitor/templates/dashboard.html
 
-# Build the generated/adapted stratum once and harden the generated RPC layer.
+# Build the generated/adapted stratum once and verify FixedCoin's GBT contract.
 RUN STRATUM_BUILD_ONLY=1 python3 /app/stratum/server.py \
  && python3 - <<'PY'
 from pathlib import Path
