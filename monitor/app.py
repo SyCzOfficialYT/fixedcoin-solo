@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FixedCoin Solo Dashboard – full FCH-style SOLO dashboard."""
+"""FixedCoin Solo Dashboard – resilient FCH-style SOLO dashboard."""
 from flask import Flask, render_template, jsonify
 import yaml, json, requests, time, os
 from requests.auth import HTTPBasicAuth
@@ -13,6 +13,10 @@ STRATUM_LOG = Path(os.environ.get("STRATUM_LOG", str(ROOT / "data" / "stratum.lo
 STATS_PATH = Path(os.environ.get("STATS_PATH", str(ROOT / "data" / "stats.json")))
 COINBASE_MATURITY = int(os.environ.get("COINBASE_MATURITY", "100"))
 TARGET_BLOCK_SEC = int(os.environ.get("TARGET_BLOCK_SEC", "600"))
+# Dashboard requests must never wait for the full node/RPC timeout.  The
+# stratum/node may be syncing or temporarily unavailable; the UI still has
+# useful local stats and must remain responsive in that state.
+DASH_RPC_TIMEOUT = float(os.environ.get("DASH_RPC_TIMEOUT", "3"))
 
 app = Flask(__name__, template_folder="templates")
 
@@ -30,13 +34,14 @@ RPC_PASS = RPC.get("password", "")
 POOL = CFG.get("pool") or {}
 HOLDING = POOL.get("payout_address") or ""
 
-def rpc(method, params=None):
+def rpc(method, params=None, timeout=None):
+    """Best-effort dashboard RPC: failures return immediately and never 500."""
     try:
         r = requests.post(
             f"http://{RPC_HOST}:{RPC_PORT}",
             json={"jsonrpc": "1.0", "id": "dash", "method": method, "params": params or []},
             auth=HTTPBasicAuth(RPC_USER, RPC_PASS),
-            timeout=int(RPC.get("timeout") or 30),
+            timeout=DASH_RPC_TIMEOUT if timeout is None else timeout,
         )
         r.raise_for_status()
         d = r.json()
@@ -246,10 +251,10 @@ def estimate_hashrate(stats, pool_diff):
             span = 1.0
         span += 0.5 * span / max(len(times) - 1, 1)
         return credited * (2 ** 32) / span
-    # single sample: assume ~5s target share interval
     return credited * (2 ** 32) / max(5.0 * len(recent), 5.0)
 
 def build_payload():
+    """Build a usable payload even when fixedcoind RPC is unavailable."""
     stats = load_stats()
     info, _ = rpc("getblockchaininfo")
     net, _ = rpc("getnetworkinfo")
@@ -258,7 +263,7 @@ def build_payload():
     headers = int(tip.get("headers") or height)
     difficulty = float(tip.get("difficulty") or stats.get("network_diff") or 0)
     connections = int((net or {}).get("connections") or 0)
-    synced = (not tip.get("initialblockdownload", True)) and height >= max(headers - 1, 0)
+    synced = bool(info) and (not tip.get("initialblockdownload", True)) and height >= max(headers - 1, 0)
 
     shares_ok = int(stats.get("shares_ok") or 0)
     shares_bad = int(stats.get("shares_bad") or 0)
@@ -276,7 +281,6 @@ def build_payload():
     eta = (net_d / max(last_work, 1e-12) * TARGET_BLOCK_SEC) if last_work and net_d else None
 
     hr = estimate_hashrate(stats, share_diff)
-
     wbal = wallet_balances()
     holding = HOLDING or stats.get("payout") or ""
     addr_ok = bool(holding) and not str(holding).startswith("fix1CHANGE")
@@ -321,6 +325,7 @@ def build_payload():
         "connections": connections,
         "rpc_host": RPC_HOST,
         "rpc_port": RPC_PORT,
+        "rpc_ok": bool(info),
         "recent_shares": list(reversed(stats.get("recent_shares") or []))[:25],
         "blocks_log": list(reversed(mat))[:1000],
         "maturity_blocks": COINBASE_MATURITY,
@@ -351,14 +356,19 @@ def index():
 def api_status():
     return jsonify(build_payload())
 
+@app.route("/api/health")
+def api_health():
+    return jsonify({"ok": True, "rpc_ok": bool(rpc("getblockchaininfo")[0]), "ts": time.strftime("%Y-%m-%d %H:%M:%S")})
+
 @app.route("/api/logs")
 def api_logs():
     stats = load_stats()
-    info, _ = rpc("getblockchaininfo")
+    # Do not make the log endpoint depend on RPC. Local events/stats are enough
+    # for the terminal panel and remain available during node sync/restarts.
     return jsonify({
         "events": load_events(120),
         "snapshot": {
-            "height": (info or {}).get("blocks"),
+            "height": stats.get("round_height"),
             "shares_ok": stats.get("shares_ok", 0),
             "shares_bad": stats.get("shares_bad", 0),
             "blocks_found": stats.get("blocks_found", 0),
