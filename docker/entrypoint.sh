@@ -14,7 +14,6 @@ cd /app
 
 echo "[allinone] FixedCoin Solo boot"
 
-# --- fixedcoin.conf ---
 cat > "$DATADIR/fixedcoin.conf" << EOF
 server=1
 daemon=0
@@ -30,7 +29,6 @@ addnode=node1.fixedcoin.org
 addnode=node2.fixedcoin.org
 EOF
 
-# --- config.yaml always (like FreeCash) ---
 python3 - <<'PY' || true
 import yaml, os
 from pathlib import Path
@@ -62,7 +60,6 @@ p.write_text(yaml.safe_dump(cfg, default_flow_style=False, sort_keys=False))
 print("[allinone] config.yaml ready, monitor", cfg["monitor"]["port"])
 PY
 
-# --- CLI wrapper ---
 if [ -x /usr/local/bin/fixedcoin-cli ] && [ ! -f /usr/local/bin/fixedcoin-cli.real ]; then
   mv /usr/local/bin/fixedcoin-cli /usr/local/bin/fixedcoin-cli.real
 fi
@@ -86,14 +83,26 @@ for i in $(seq 1 180); do
     echo "[allinone] fixedcoind died"
     exit 1
   fi
+  if [ "$i" -eq 180 ]; then
+    echo "[allinone] RPC timeout"
+    exit 1
+  fi
   sleep 1
 done
 
-# Wallet + payout address auto
+# Verify RPC + genesis + tip + recent chain links + mining template before
+# starting stratum/dashboard. This makes a broken chain/RPC fail fast.
+echo "[allinone] verify chain + RPC"
+FIX_RPC_HOST=127.0.0.1 FIX_RPC_PORT="$RPCPORT" FIX_RPCUSER="$RPCUSER" FIX_RPCPASS="$RPCPASS" \
+  python3 /app/tools/verify_chain_rpc.py || {
+    echo "[allinone] chain/RPC verification FAILED"
+    exit 1
+  }
+echo "[allinone] chain/RPC verification PASS"
+
 python3 /app/scripts/setup_address.py 2>/dev/null || echo "[allinone] address setup skip/later"
 touch /data/events.jsonl /data/stats.json /app/data/events.jsonl /app/data/stratum.log /app/data/dashboard.log 2>/dev/null || true
 
-# keep stratum + dashboard alive
 run_forever() {
   local name="$1"
   local logfile="$2"
