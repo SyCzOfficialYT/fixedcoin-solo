@@ -5,8 +5,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ARG FIX_VER=29.1.3
-# This is the exact full FreeCash dashboard revision that contains the live
-# shares, live competition, block history/maturity view and CLI terminal.
+# Exact full FreeCash dashboard revision with live shares, live competition,
+# block history/maturity and CLI terminal.
 ARG FCH_DASHBOARD_COMMIT=a3016f07fc36f9e25d86c4f825f9185859bae17b
 RUN mkdir -p /opt/fixedcoin \
  && curl -fsSL -o /tmp/fix.tgz \
@@ -22,8 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . /app
 
 # Install the exact FreeCash UI revision into the FixedCoin image.
-# Only presentation labels are adapted: FCH -> FIX. All layout, CSS,
-# Live Competition, Live Shares, Blocks/Maturity and CLI Terminal stay intact.
+# Only presentation labels are adapted: FCH -> FIX.
 RUN curl -fsSL \
     "https://raw.githubusercontent.com/SyCzOfficialYT/freecash-coin/${FCH_DASHBOARD_COMMIT}/monitor/templates/dashboard.html" \
     -o /app/monitor/templates/dashboard.html \
@@ -32,7 +31,6 @@ from pathlib import Path
 p=Path('/app/monitor/templates/dashboard.html')
 s=p.read_text()
 s=s.replace('FCH Solo','FIX Solo').replace('FCH','FIX')
-# Keep FixedCoin's actual coinbase maturity (100 blocks), never inherit FCH's old value.
 s=s.replace('14400','{{ maturity_blocks }}')
 assert 'Live Shares' in s
 assert 'Blocks · Coinbase maturity countdown' in s
@@ -43,11 +41,14 @@ p.write_text(s)
 print('Exact FreeCash dashboard installed:', len(s), 'bytes')
 PY
 
+# Make the FixedCoin backend expose every field required by that exact UI and
+# make freshly-found coinbases visible as immature before wallet indexing catches up.
+RUN python3 /app/tools/patch_fixedcoin_dashboard.py
+
 RUN STRATUM_BUILD_ONLY=1 python3 /app/stratum/server.py \
  && python3 - <<'PY'
 from pathlib import Path
 p=Path('/app/stratum/server_full.py'); s=p.read_text()
-# FixedCoin Core requires BIP145/SegWit GBT negotiation.
 for old in (
     'rpc("getblocktemplate", [{"rules": []}])',
     'rpc("getblocktemplate", [])',
@@ -56,7 +57,6 @@ for old in (
 for line in s.splitlines():
     if 'getblocktemplate' in line and 'rules": ["segwit"]' not in line:
         raise SystemExit(f'unsafe GBT call remains: {line}')
-# -10 is a normal Core initial-sync state, not a broken RPC endpoint.
 old='''def rpc(method, params=None):
     try:
         r = requests.post(
