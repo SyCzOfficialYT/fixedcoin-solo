@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""FixedCoin Solo Dashboard – full FCH-style SOLO dashboard (Live Competition + Live Shares)."""
+"""FixedCoin Solo Dashboard – full FCH-style SOLO dashboard."""
 from flask import Flask, render_template, jsonify
-import yaml, json, requests, time, re, os
+import yaml, json, requests, time, os
 from requests.auth import HTTPBasicAuth
 from pathlib import Path
 from datetime import datetime, timezone
@@ -59,8 +59,7 @@ def read_tail_lines(path, limit=120):
         path = Path(path)
         if not path.exists():
             return []
-        lines = path.read_text(errors="replace").splitlines()
-        return lines[-limit:]
+        return path.read_text(errors="replace").splitlines()[-limit:]
     except Exception:
         return []
 
@@ -77,7 +76,11 @@ def load_events(limit=120):
     if len(out) < 5:
         for raw in read_tail_lines(STRATUM_LOG, 80):
             if "ACCEPT" in raw or "BLOCK" in raw or "ERROR" in raw:
-                out.append({"ts": raw[:19] if len(raw) > 19 else "", "level": "OK" if "ACCEPT" in raw else "INFO", "msg": raw[20:].strip() if len(raw) > 20 else raw})
+                out.append({
+                    "ts": raw[:19] if len(raw) > 19 else "",
+                    "level": "OK" if "ACCEPT" in raw else "INFO",
+                    "msg": raw[20:].strip() if len(raw) > 20 else raw,
+                })
     return out[-limit:]
 
 def fmt_diff(v):
@@ -85,6 +88,8 @@ def fmt_diff(v):
         v = float(v or 0)
     except Exception:
         return "–"
+    if v <= 0:
+        return "0"
     if v >= 1e12:
         return f"{v/1e12:.2f} T"
     if v >= 1e9:
@@ -99,6 +104,8 @@ def fmt_hashrate(hps):
     try:
         hps = float(hps or 0)
     except Exception:
+        return "–"
+    if hps <= 0:
         return "–"
     if hps >= 1e18:
         return f"{hps/1e18:.2f} EH/s"
@@ -134,7 +141,7 @@ def _parse_ts(s):
     if not s:
         return None
     try:
-        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return datetime.strptime(str(s)[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
     except Exception:
         return None
 
@@ -161,30 +168,97 @@ def maturity_info(height, blocks_log):
 
 def wallet_balances():
     for method in ("getbalances", "getwalletinfo"):
-        res, err = rpc(method)
+        res, _ = rpc(method)
         if not res:
             continue
         if method == "getbalances":
             mine = res.get("mine") or {}
-            confirmed = float(mine.get("trusted") or 0)
-            unconfirmed = float(mine.get("untrusted_pending") or 0) + float(mine.get("immature") or 0)
-            return {"confirmed": confirmed, "unconfirmed": unconfirmed}
-        confirmed = float(res.get("balance") or 0)
-        unconfirmed = float(res.get("unconfirmed_balance") or 0) + float(res.get("immature_balance") or 0)
-        return {"confirmed": confirmed, "unconfirmed": unconfirmed}
+            return {
+                "confirmed": float(mine.get("trusted") or 0),
+                "unconfirmed": float(mine.get("untrusted_pending") or 0) + float(mine.get("immature") or 0),
+            }
+        return {
+            "confirmed": float(res.get("balance") or 0),
+            "unconfirmed": float(res.get("unconfirmed_balance") or 0) + float(res.get("immature_balance") or 0),
+        }
     return {"confirmed": 0.0, "unconfirmed": 0.0}
+
+def resolve_pool_diff(stats):
+    """Pool/share difficulty the miner is working at (password d=… / VarDiff)."""
+    for key in ("last_share_diff", "share_diff", "pool_difficulty", "current_diff"):
+        try:
+            v = float(stats.get(key) or 0)
+            if v > 0:
+                return v
+        except Exception:
+            pass
+    workers = stats.get("workers") or {}
+    for w in workers.values() if isinstance(workers, dict) else []:
+        if not isinstance(w, dict):
+            continue
+        for key in ("diff", "difficulty", "share_diff", "pool_diff"):
+            try:
+                v = float(w.get(key) or 0)
+                if v > 0:
+                    return v
+            except Exception:
+                pass
+    recent = stats.get("recent_shares") or []
+    for s in reversed(recent):
+        if not isinstance(s, dict):
+            continue
+        for key in ("pool_diff", "diff", "difficulty"):
+            try:
+                v = float(s.get(key) or 0)
+                if v > 0:
+                    return v
+            except Exception:
+                pass
+    try:
+        return float((POOL.get("start_difficulty") or 0))
+    except Exception:
+        return 0.0
+
+def estimate_hashrate(stats, pool_diff):
+    """H = sum(pool_diff per share) * 2^32 / seconds — never use lucky share work."""
+    recent = list(stats.get("recent_shares") or [])
+    if not recent:
+        return 0.0
+    times = []
+    credited = 0.0
+    for s in recent:
+        if not isinstance(s, dict):
+            continue
+        try:
+            pd = float(s.get("pool_diff") or s.get("diff") or pool_diff or 0)
+        except Exception:
+            pd = float(pool_diff or 0)
+        if pd > 0:
+            credited += pd
+        ts = _parse_ts(s.get("ts") or s.get("time") or "")
+        if ts:
+            times.append(ts)
+    if credited <= 0:
+        return 0.0
+    if len(times) >= 2:
+        span = (max(times) - min(times)).total_seconds()
+        if span < 1:
+            span = 1.0
+        span += 0.5 * span / max(len(times) - 1, 1)
+        return credited * (2 ** 32) / span
+    # single sample: assume ~5s target share interval
+    return credited * (2 ** 32) / max(5.0 * len(recent), 5.0)
 
 def build_payload():
     stats = load_stats()
     info, _ = rpc("getblockchaininfo")
-    mining, _ = rpc("getmininginfo")
     net, _ = rpc("getnetworkinfo")
     tip = info or {}
     height = int(tip.get("blocks") or stats.get("round_height") or 0)
     headers = int(tip.get("headers") or height)
     difficulty = float(tip.get("difficulty") or stats.get("network_diff") or 0)
     connections = int((net or {}).get("connections") or 0)
-    synced = (not tip.get("initialblockdownload", True)) and height >= headers - 1
+    synced = (not tip.get("initialblockdownload", True)) and height >= max(headers - 1, 0)
 
     shares_ok = int(stats.get("shares_ok") or 0)
     shares_bad = int(stats.get("shares_bad") or 0)
@@ -192,7 +266,7 @@ def build_payload():
     reject_pct = (100.0 * shares_bad / total) if total else 0.0
     best = float(stats.get("best_share_diff") or stats.get("round_best") or 0)
     last_work = float(stats.get("last_share_work") or 0)
-    share_diff = float(stats.get("share_diff") or stats.get("pool_difficulty") or 0)
+    share_diff = resolve_pool_diff(stats)
     net_d = float(stats.get("network_diff") or difficulty or 1)
     effort = float(stats.get("round_effort_pct") or 0)
     if not effort and net_d and stats.get("round_work"):
@@ -201,35 +275,11 @@ def build_payload():
     last_pct = (100.0 * last_work / net_d) if net_d and last_work else 0.0
     eta = (net_d / max(last_work, 1e-12) * TARGET_BLOCK_SEC) if last_work and net_d else None
 
-    # Miner hashrate from shares (NOT network hashrate).
-    # H = sum(share_diff) * 2^32 / seconds
-    hr = 0.0
-    recent = list(stats.get("recent_shares") or [])
-    if recent:
-        times = []
-        work = 0.0
-        for s in recent:
-            try:
-                work += float(s.get("work") or s.get("diff") or share_diff or 0)
-            except Exception:
-                pass
-            ts = _parse_ts(s.get("ts") or s.get("time") or "")
-            if ts:
-                times.append(ts)
-        if len(times) >= 2 and work > 0:
-            span = (max(times) - min(times)).total_seconds()
-            if span < 1:
-                span = 1.0
-            span += span / max(len(times) - 1, 1)
-            hr = work * (2 ** 32) / span
-        elif work > 0 and share_diff:
-            hr = float(share_diff) * (2 ** 32) / 5.0
-    if not hr and share_diff:
-        hr = float(share_diff) * (2 ** 32) / 10.0
+    hr = estimate_hashrate(stats, share_diff)
 
     wbal = wallet_balances()
     holding = HOLDING or stats.get("payout") or ""
-    addr_ok = bool(holding) and not holding.startswith("fix1CHANGE")
+    addr_ok = bool(holding) and not str(holding).startswith("fix1CHANGE")
     addr_msg = "OK" if addr_ok else "set pool.payout_address"
 
     mat = maturity_info(height, stats.get("blocks_log") or [])
@@ -316,10 +366,11 @@ def api_logs():
             "round_shares": stats.get("round_shares", 0),
             "best_share_diff": stats.get("best_share_diff", 0),
             "last_share_work": stats.get("last_share_work"),
+            "last_share_diff": stats.get("last_share_diff"),
         },
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
     })
 
 if __name__ == "__main__":
-    mon = (CFG.get("monitor") or {})
+    mon = CFG.get("monitor") or {}
     app.run(host=mon.get("host", "0.0.0.0"), port=int(mon.get("port", 5050)), debug=False)
