@@ -1,5 +1,5 @@
 #!/bin/bash
-# FixedCoin Solo – fixedcoind + stratum + dashboard, config.yaml auto
+# FixedCoin Solo – fixedcoind + stratum + dashboard, persistent wallet/payout config
 set -u
 
 DATADIR="${FIX_DATADIR:-/data/fixedcoin}"
@@ -8,13 +8,20 @@ RPCPASS="${FIX_RPCPASS:-FixedcoinSoloAutoRpc_ChangeMeIfPublic}"
 RPCPORT="${FIX_RPCPORT:-24761}"
 P2PPORT="${FIX_P2PPORT:-24768}"
 DASH_PORT="${FIX_DASH_PORT:-5050}"
-PAYOUT_ADDRESS="${FIX_PAYOUT_ADDRESS:-fix1qe60s2t5kdr5fugje4zs0djtgf7larsl8jhayq8}"
 
 mkdir -p "$DATADIR" /data /app/data /app/logs /app/config
 cd /app
 
-echo "[allinone] FixedCoin Solo boot"
+# Payout address is state, not image configuration. Prefer an explicit env
+# override; otherwise restore the address generated during the first boot.
+PAYOUT_FILE="$DATADIR/payout_address"
+PAYOUT_ADDRESS="${FIX_PAYOUT_ADDRESS:-}"
+if [ -z "$PAYOUT_ADDRESS" ] && [ -s "$PAYOUT_FILE" ]; then
+    PAYOUT_ADDRESS="$(tr -d '\r\n ' < "$PAYOUT_FILE")"
+fi
 
+# Keep the daemon config deterministic while allowing the persistent wallet
+# and payout address to survive container/image recreation.
 cat > "$DATADIR/fixedcoin.conf" << EOF
 server=1
 daemon=0
@@ -39,15 +46,38 @@ if p.exists():
     try: cfg = yaml.safe_load(p.read_text()) or {}
     except Exception: cfg = {}
 cfg.setdefault("rpc", {})
-cfg["rpc"].update({"host":"127.0.0.1","port":int(os.environ.get("FIX_RPCPORT","24761")),"user":os.environ.get("FIX_RPCUSER","fixrpc"),"password":os.environ.get("FIX_RPCPASS","FixedcoinSoloAutoRpc_ChangeMeIfPublic"),"timeout":30})
+cfg["rpc"].update({
+    "host": "127.0.0.1",
+    "port": int(os.environ.get("FIX_RPCPORT", "24761")),
+    "user": os.environ.get("FIX_RPCUSER", "fixrpc"),
+    "password": os.environ.get("FIX_RPCPASS") or "FixedcoinSoloAutoRpc_ChangeMeIfPublic",
+    "timeout": 30,
+})
 cfg.setdefault("pool", {})
-payout = os.environ.get("FIX_PAYOUT_ADDRESS", "").strip()
-if payout: cfg["pool"]["payout_address"] = payout
-else: cfg["pool"].setdefault("payout_address", "fix1CHANGE_ME_GETNEWADDRESS")
-cfg["pool"]["stratum_port"] = int(cfg["pool"].get("stratum_port",3333)); cfg["pool"]["stratum_host"] = cfg["pool"].get("stratum_host","0.0.0.0"); cfg["pool"]["start_difficulty"] = int(cfg["pool"].get("start_difficulty",10000)); cfg["pool"]["fixed_difficulty"] = int(cfg["pool"].get("fixed_difficulty",13354)); cfg["pool"]["min_difficulty"] = int(cfg["pool"].get("min_difficulty",1000)); cfg["pool"]["job_interval"] = int(cfg["pool"].get("job_interval",30)); cfg["monitor"]={"host":"0.0.0.0","port":int(os.environ.get("FIX_DASH_PORT","5050"))}; cfg.setdefault("logging",{"level":"INFO"}); p.write_text(yaml.safe_dump(cfg,default_flow_style=False,sort_keys=False)); print("[allinone] config.yaml ready, payout",cfg["pool"].get("payout_address"),"monitor",cfg["monitor"]["port"])
+payout = (os.environ.get("FIX_PAYOUT_ADDRESS") or "").strip()
+if not payout:
+    payout_file = Path(os.environ.get("FIX_DATADIR", "/data/fixedcoin")) / "payout_address"
+    if payout_file.exists():
+        payout = payout_file.read_text().strip()
+if payout:
+    cfg["pool"]["payout_address"] = payout
+else:
+    cfg["pool"].setdefault("payout_address", "fix1CHANGE_ME_GETNEWADDRESS")
+cfg["pool"]["stratum_port"] = int(cfg["pool"].get("stratum_port", 3333))
+cfg["pool"]["stratum_host"] = cfg["pool"].get("stratum_host", "0.0.0.0")
+cfg["pool"]["start_difficulty"] = int(cfg["pool"].get("start_difficulty", 10000))
+cfg["pool"]["fixed_difficulty"] = int(cfg["pool"].get("fixed_difficulty", 13354))
+cfg["pool"]["min_difficulty"] = int(cfg["pool"].get("min_difficulty", 1000))
+cfg["pool"]["job_interval"] = int(cfg["pool"].get("job_interval", 30))
+cfg["monitor"] = {"host": "0.0.0.0", "port": int(os.environ.get("FIX_DASH_PORT", "5050"))}
+cfg.setdefault("logging", {"level": "INFO"})
+p.write_text(yaml.safe_dump(cfg, default_flow_style=False, sort_keys=False))
+print("[allinone] config.yaml ready, payout", cfg["pool"].get("payout_address"), "monitor", cfg["monitor"]["port"])
 PY
 
-if [ -x /usr/local/bin/fixedcoin-cli ] && [ ! -f /usr/local/bin/fixedcoin-cli.real ]; then mv /usr/local/bin/fixedcoin-cli /usr/local/bin/fixedcoin-cli.real; fi
+if [ -x /usr/local/bin/fixedcoin-cli ] && [ ! -f /usr/local/bin/fixedcoin-cli.real ]; then
+    mv /usr/local/bin/fixedcoin-cli /usr/local/bin/fixedcoin-cli.real
+fi
 cat > /usr/local/bin/fixedcoin-cli << EOF
 #!/bin/bash
 exec /usr/local/bin/fixedcoin-cli.real -datadir="$DATADIR" -rpcuser="$RPCUSER" -rpcpassword="$RPCPASS" "\$@"
@@ -56,8 +86,6 @@ chmod +x /usr/local/bin/fixedcoin-cli
 export PATH="/usr/local/bin:$PATH"
 touch /data/events.jsonl /data/stats.json /app/data/events.jsonl /app/data/stratum.log /app/data/dashboard.log 2>/dev/null || true
 
-# Fail fast if the image does not contain the exact NEW-FCH dashboard contract
-# or if the Flask root route is missing (prevents another silent 404 deployment).
 python3 - <<'PY'
 from pathlib import Path
 from monitor.app import app
@@ -69,7 +97,6 @@ PY
 
 run_forever() { local name="$1"; local logfile="$2"; shift 2; while true; do echo "[allinone] start $name: $*"; "$@" >>"$logfile" 2>&1 & local pid=$!; echo $pid >"/tmp/${name}.pid"; wait $pid; local rc=$?; echo "[allinone] $name exited rc=$rc – restart in 3s"; sleep 3; done; }
 
-# Run the exact FreeCash-derived FixedCoin dashboard directly. app_fixed is deliberately not used.
 run_forever dashboard /app/data/dashboard.log python3 /app/monitor/app.py &
 DASH_SUPERVISOR_PID=$!
 echo "[allinone] dashboard supervisor started on :${DASH_PORT}"
@@ -86,7 +113,11 @@ for i in $(seq 1 180); do
 done
 
 echo "[allinone] verify chain + RPC"
-if FIX_RPC_HOST=127.0.0.1 FIX_RPC_PORT="$RPCPORT" FIX_RPCUSER="$RPCUSER" FIX_RPCPASS="$RPCPASS" FIX_RPC_IN_CONTAINER=1 python3 /app/tools/verify_chain_rpc.py; then echo "[allinone] chain/RPC verification PASS"; else echo "[allinone] WARNING: chain/RPC verification FAILED; keeping container alive and starting stratum anyway"; fi
+if FIX_RPC_HOST=127.0.0.1 FIX_RPC_PORT="$RPCPORT" FIX_RPCUSER="$RPCUSER" FIX_RPCPASS="$RPCPASS" FIX_RPC_IN_CONTAINER=1 python3 /app/tools/verify_chain_rpc.py; then
+    echo "[allinone] chain/RPC verification PASS"
+else
+    echo "[allinone] WARNING: chain/RPC verification FAILED; keeping container alive and starting stratum anyway"
+fi
 
 python3 /app/scripts/setup_address.py 2>/dev/null || echo "[allinone] address setup skip/later"
 run_forever stratum /app/data/stratum.log python3 /app/stratum/server.py &
