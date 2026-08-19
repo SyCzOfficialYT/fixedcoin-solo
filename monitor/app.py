@@ -111,11 +111,19 @@ def fmt_time(sec):
     if sec<3600:return f"{sec//60}m {sec%60}s"
     if sec<86400:return f"{sec//3600}h {(sec%3600)//60}m"
     return f"{sec//86400}d {(sec%86400)//3600}h"
+def difficulty_target(diff):
+    try:diff=float(diff)
+    except Exception:return "", ""
+    if diff<=0:return "", ""
+    diff1=int("00000000FFFF0000000000000000000000000000000000000000000000000000",16)
+    target=max(1,int(diff1/diff)); size=(target.bit_length()+7)//8
+    mant=(target << (8*(3-size))) if size<=3 else (target >> (8*(size-3)))
+    compact=((size<<24)|(mant & 0x007fffff)) & 0xffffffff
+    return f"{target:064x}",f"{compact:08x}"
 def payload():
     info,info_err=rpc("getblockchaininfo"); net,_=rpc("getnetworkinfo"); s=load_stats(); log=parse_stratum(); shares=log if log["shares_ok"] or log["shares_bad"] else s
     height=int((info or {}).get("blocks") or log.get("round_height") or 0); headers=int((info or {}).get("headers") or height); diff=float((info or {}).get("difficulty") or log.get("network_diff") or 0); nd=diff or float(log.get("network_diff") or 1)
-    recent=list(shares.get("recent_shares") or [])[-100:]; best=max([float(x.get("work") or 0) for x in recent],default=float(shares.get("best_share_diff") or 0)); last=float((recent[-1] if recent else {}).get("work") or shares.get("last_share_work") or 0)
-    ts=[]
+    recent=list(shares.get("recent_shares") or [])[-100:]; best=max([float(x.get("work") or 0) for x in recent],default=float(shares.get("best_share_diff") or 0)); last=float((recent[-1] if recent else {}).get("work") or shares.get("last_share_work") or 0); ts=[]
     for x in recent:
         try:ts.append(datetime.strptime(str(x.get("ts"))[:19],"%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc))
         except Exception:pass
@@ -128,8 +136,8 @@ def payload():
             if cb:merged[str(cb.get("txid") or cb.get("hash") or h)]=cb
             conf=max(0,height-h+1); b["confirmations"]=conf; b["mature_at_height"]=int(b.get("mature_at_height") or h+COINBASE_MATURITY); b["left"]=max(0,b["mature_at_height"]-height); b["mature"]=b["left"]==0; b["spendable"]=b["left"]==0; b["confs"]=min(COINBASE_MATURITY,conf)
         except Exception:pass
-    blocks=sorted(merged.values(),key=lambda x:int(x.get("height") or 0),reverse=True)[:1000]; rewards=sum(float(x.get("reward") or 0) for x in blocks); effort=min(100,100*best/nd) if nd else 0; last_pct=min(100,100*last/nd) if nd else 0; eta=(nd*2**32/hr) if hr else None
-    return {"synced":bool(info) and not bool((info or {}).get("initialblockdownload",False)),"height":height,"headers":headers,"difficulty":diff,"difficulty_fmt":fmt_diff(diff),"hashrate_fmt":fmt_hr(hr),"balance_fmt":f"{confirmed:.8f}","immature_fmt":f"{immature:.8f}","immature":immature,"confirmed":confirmed,"confirmed_fmt":f"{confirmed:.8f}","unconfirmed":pending+immature,"unconfirmed_fmt":f"{pending+immature:.8f}","blocks_found":len(blocks),"rewards_fmt":f"{rewards:.8f}","effort_pct":round(effort,4),"best_pct":round(effort,4),"best_share_diff":best,"last_pct":round(last_pct,4),"eta_fmt":fmt_time(eta),"best_share_fmt":fmt_diff(best),"last_share_work_fmt":fmt_diff(last),"shares_ok":int(shares.get("shares_ok") or 0),"shares_bad":int(shares.get("shares_bad") or 0),"reject_pct":round(100*int(shares.get("shares_bad") or 0)/max(1,int(shares.get("shares_ok") or 0)+int(shares.get("shares_bad") or 0)),1),"share_diff":float(POOL.get("fixed_difficulty") or POOL.get("start_difficulty") or 1),"share_diff_fmt":fmt_diff(float(POOL.get("fixed_difficulty") or POOL.get("start_difficulty") or 1)),"last_share_time":shares.get("last_share_time"),"last_share_hash":shares.get("last_share_hash"),"payout":PAYOUT,"addr_ok":bool(PAYOUT),"workers":shares.get("workers") or {},"connections":int((net or {}).get("connections") or 0),"rpc_ok":bool(info),"rpc_error":None if info else info_err,"recent_shares":list(reversed(recent)),"blocks_log":blocks,"maturity_blocks":COINBASE_MATURITY,"ts":time.strftime("%Y-%m-%d %H:%M:%S"),"target":"","nbits":"","protocol":str((net or {}).get("protocolversion") or ""),"verification":f"{(info or {}).get('verificationprogress',0)*100:.2f}%" if info else "–"}
+    blocks=sorted(merged.values(),key=lambda x:int(x.get("height") or 0),reverse=True)[:1000]; rewards=sum(float(x.get("reward") or 0) for x in blocks); effort=min(100,100*best/nd) if nd else 0; last_pct=min(100,100*last/nd) if nd else 0; eta=(nd*2**32/hr) if hr else None; target_hex,nbits=difficulty_target(diff)
+    return {"synced":bool(info) and not bool((info or {}).get("initialblockdownload",False)),"height":height,"headers":headers,"difficulty":diff,"difficulty_fmt":fmt_diff(diff),"hashrate_fmt":fmt_hr(hr),"balance_fmt":f"{confirmed:.8f}","immature_fmt":f"{immature:.8f}","immature":immature,"confirmed":confirmed,"confirmed_fmt":f"{confirmed:.8f}","unconfirmed":pending+immature,"unconfirmed_fmt":f"{pending+immature:.8f}","blocks_found":len(blocks),"rewards_fmt":f"{rewards:.8f}","effort_pct":round(effort,4),"best_pct":round(effort,4),"best_share_diff":best,"last_pct":round(last_pct,4),"eta_fmt":fmt_time(eta),"best_share_fmt":fmt_diff(best),"last_share_work_fmt":fmt_diff(last),"shares_ok":int(shares.get("shares_ok") or 0),"shares_bad":int(shares.get("shares_bad") or 0),"reject_pct":round(100*int(shares.get("shares_bad") or 0)/max(1,int(shares.get("shares_ok") or 0)+int(shares.get("shares_bad") or 0)),1),"share_diff":float(POOL.get("fixed_difficulty") or POOL.get("start_difficulty") or 1),"share_diff_fmt":fmt_diff(float(POOL.get("fixed_difficulty") or POOL.get("start_difficulty") or 1)),"last_share_time":shares.get("last_share_time"),"last_share_hash":shares.get("last_share_hash"),"payout":PAYOUT,"addr_ok":bool(PAYOUT),"workers":shares.get("workers") or {},"connections":int((net or {}).get("connections") or 0),"rpc_ok":bool(info),"rpc_error":None if info else info_err,"recent_shares":list(reversed(recent)),"blocks_log":blocks,"maturity_blocks":COINBASE_MATURITY,"ts":time.strftime("%Y-%m-%d %H:%M:%S"),"target":target_hex,"nbits":nbits,"protocol":str((net or {}).get("protocolversion") or ""),"verification":f"{(info or {}).get('verificationprogress',0)*100:.2f}%" if info else "–"}
 def events(limit=160):
     out=[]
     for raw in read_lines(EVENTS_PATH,limit):
