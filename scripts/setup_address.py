@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FixedCoin: ensure the mining wallet exists/is loaded and preserve the configured payout address."""
+"""FixedCoin: ensure the mining wallet is loaded and persist one payout address."""
 from __future__ import annotations
 
 import re
@@ -13,6 +13,8 @@ from requests.auth import HTTPBasicAuth
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config" / "config.yaml"
+DATADIR = Path(__import__("os").environ.get("FIX_DATADIR", "/data/fixedcoin"))
+PAYOUT_FILE = DATADIR / "payout_address"
 PLACEHOLDER_RE = re.compile(r"CHANGE|xxxxxxxx|GETNEWADDRESS", re.I)
 
 
@@ -28,7 +30,18 @@ def save_payout(addr: str, cfg: dict):
     cfg.setdefault("pool", {})["payout_address"] = addr
     with open(CONFIG_PATH, "w") as f:
         yaml.safe_dump(cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    DATADIR.mkdir(parents=True, exist_ok=True)
+    PAYOUT_FILE.write_text(addr + "\n")
     print(f"config.yaml aktualisiert: payout_address = {addr}")
+    print(f"Persistente payout_address gespeichert: {PAYOUT_FILE}")
+
+
+def persist_existing(addr: str):
+    DATADIR.mkdir(parents=True, exist_ok=True)
+    if PAYOUT_FILE.exists() and PAYOUT_FILE.read_text().strip() == addr:
+        return
+    PAYOUT_FILE.write_text(addr + "\n")
+    print(f"Persistente payout_address gespeichert: {PAYOUT_FILE}")
 
 
 def rpc(cfg, method, params=None):
@@ -40,36 +53,52 @@ def rpc(cfg, method, params=None):
             auth=HTTPBasicAuth(r["user"], r["password"]),
             timeout=30,
         )
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("error"):
+        try:
+            data = resp.json()
+        except Exception:
+            data = None
+        if resp.status_code != 200:
+            detail = data.get("error") if isinstance(data, dict) else resp.text[:500]
+            return None, f"HTTP {resp.status_code}: {detail}"
+        if isinstance(data, dict) and data.get("error"):
             return None, data["error"]
-        return data.get("result"), None
+        return data.get("result") if isinstance(data, dict) else None, None
     except Exception as e:
         return None, str(e)
 
 
 def ensure_wallet_rpc(cfg):
-    """Make sure the named mining wallet is actually loaded before address checks."""
+    """Load the existing mining wallet; only create it if it truly does not exist."""
     wallets, err = rpc(cfg, "listwallets")
     if wallets is None:
         print(f"Wallet list unavailable: {err}")
         return False
     wallets = list(wallets or [])
     if "mining" in wallets:
+        print("Mining wallet already loaded — keeping existing wallet/address.")
         return True
 
     result, load_err = rpc(cfg, "loadwallet", ["mining"])
     if result is not None:
-        print("Mining wallet loaded.")
+        print("Existing mining wallet loaded — no new wallet generated.")
         return True
+
+    # A missing wallet is the only normal reason to create it.
+    if isinstance(load_err, dict):
+        msg = str(load_err.get("message", ""))
+        if "not found" not in msg.lower() and "does not exist" not in msg.lower():
+            print(f"WARNING: loadwallet failed: {load_err}")
+            return False
+    elif load_err and "not found" not in str(load_err).lower() and "does not exist" not in str(load_err).lower():
+        print(f"WARNING: loadwallet failed: {load_err}")
+        return False
 
     result, create_err = rpc(cfg, "createwallet", ["mining"])
     if result is not None:
-        print("Mining wallet created and loaded.")
+        print("Mining wallet created and loaded (first-run only).")
         return True
 
-    print(f"WARNING: could not load/create mining wallet: {load_err or create_err}")
+    print(f"WARNING: could not create mining wallet: {create_err}")
     return False
 
 
@@ -103,13 +132,19 @@ def validate(cfg, addr: str):
 def main():
     cfg = load_cfg()
 
-    # IMPORTANT: wallet loading is independent from payout-address validation.
-    # A valid address must never cause wallet initialization to be skipped.
     ensure_wallet_rpc(cfg)
 
-    current = (cfg.get("pool") or {}).get("payout_address") or ""
+    # Persistent payout state wins over the image's example config.
+    persistent = PAYOUT_FILE.read_text().strip() if PAYOUT_FILE.exists() else ""
+    if persistent:
+        current = persistent
+        cfg.setdefault("pool", {})["payout_address"] = current
+    else:
+        current = (cfg.get("pool") or {}).get("payout_address") or ""
+
     ok, msg = validate(cfg, current)
     if ok and not PLACEHOLDER_RE.search(current):
+        save_payout(current, cfg)
         print(f"Holding-Adresse bereits gesetzt und gültig: {current}")
         print(f"  Status: {msg}")
         return 0
@@ -127,13 +162,14 @@ def main():
 
     if not addr:
         print("FEHLER: konnte keine Adresse erzeugen.")
-        print("  Manuell: fixedcoin-cli createwallet mining && fixedcoin-cli getnewaddress")
+        print("Manuell: fixedcoin-cli createwallet mining && fixedcoin-cli getnewaddress")
         return 1
 
     ok, msg = validate(cfg, addr)
     if not ok:
         print(f"FEHLER: neue Adresse {addr} – {msg}")
         return 1
+
     save_payout(addr, cfg)
     print(f"Holding-Adresse: {addr}")
     print("  → Dashboard zeigt diese Adresse; Solo-Rewards landen hier.")
