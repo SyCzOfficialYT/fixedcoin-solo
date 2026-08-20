@@ -1,6 +1,12 @@
 # FixedCoin Solo Mining (Docker)
 
-Same stack as FreeCash solo: **fixedcoind + Stratum + full Live-Competition dashboard**.
+Production-oriented FixedCoin solo stack: **fixedcoind + FixedCoin-adapted Stratum + Live dashboard**.
+
+## Important: block-found semantics
+
+A miner finding a hash below the network target is only a **block candidate**. The node is the final authority. The Stratum server therefore does **not** record or announce `BLOCK ACCEPTED` until `submitblock` succeeds **and** the exact candidate hash is visible through `getblock` at the expected height.
+
+This is critical because JSON-RPC `submitblock` normally returns `null` on success. A generic RPC helper that also returns `null` on errors can otherwise turn a rejected block into a false `BLOCK ACCEPTED` event.
 
 ## One-shot after clone / git pull
 
@@ -8,33 +14,42 @@ Same stack as FreeCash solo: **fixedcoind + Stratum + full Live-Competition dash
 cd fixedcoin-solo
 git pull --ff-only
 chmod +x tools/install_ui.sh tools/deploy_ui.sh
-./tools/install_ui.sh          # pulls real FCH solo UI, renames to FIX
 sudo docker compose up -d --build
-sudo ./tools/deploy_ui.sh      # patches stratum (no DEV_ADDRESS), copies UI into container
 ```
 
 Dashboard: **http://HOST:5050**  
 Stratum: **stratum+tcp://HOST:3333** · User `fix1….worker` · Pass `x` or `d=13354`
 
-The solo stratum enforces the configured fixed share difficulty (`fixed_difficulty`, default **13354**) whenever the miner explicitly supplies a `d=` / `diff=` password. A stale miner password such as `d=13111` therefore cannot silently change the pool share target.
+The solo Stratum enforces the configured fixed share difficulty (`fixed_difficulty`, default **13354**) whenever the miner explicitly supplies a `d=` / `diff=` password. A stale miner password such as `d=13111` therefore cannot silently change the pool share target.
 
-`config/config.yaml` and payout `fix1…` are auto-created on first boot.
+`config/config.yaml` and the persistent `fix1…` payout address are created/retained on first boot.
 
-## Logs (what is happening)
+## Logs
 
 ```bash
-# Everything (node + stratum + dashboard)
 sudo docker logs -f fixedcoin-solo
-
-# Last 100 lines
 sudo docker logs fixedcoin-solo --tail 100
-
-# Only stratum / share / block lines
-sudo docker logs fixedcoin-solo 2>&1 | grep -E "ACCEPT|BLOCK|ERROR|authorized|listening|Stratum|Payout|reject|DEV_ADDRESS|NameError"
-
-# Live filter
-sudo docker logs -f fixedcoin-solo 2>&1 | grep -E "ACCEPT|BLOCK|ERROR|WARN|authorized|listening"
+sudo docker logs fixedcoin-solo 2>&1 | grep -E "ACCEPT|BLOCK|ERROR|WARN|authorized|listening|Payout|submitblock"
 ```
+
+For a genuine block you must see the sequence:
+
+```text
+*** BLOCK CANDIDATE ***
+*** BLOCK ACCEPTED ***
+```
+
+A rejected or unverified candidate is logged as:
+
+```text
+submitblock rejected/unverified: ...
+```
+
+## Addresses in historical blocks
+
+`getblock` shows the **coinbase outputs embedded in the blockchain**. Addresses such as legacy-looking `dB2...`, `iUv...`, `Tz...`, or other `fix1...` addresses in old network blocks are **not wallet addresses created by this container and cannot be deleted from the blockchain**. They are historical recipients of those blocks.
+
+The pool payout address is separate and is taken from the persistent `payout_address` state / `FIX_PAYOUT_ADDRESS`. Do not rewrite or delete historical chain data merely to make those addresses disappear from a block explorer or chain scan.
 
 ## Specs
 
@@ -48,5 +63,6 @@ sudo docker logs -f fixedcoin-solo 2>&1 | grep -E "ACCEPT|BLOCK|ERROR|WARN|autho
 
 ## Notes
 
-- `tools/deploy_ui.sh` patches server **only in a temp dir** then `docker cp` — working tree stays clean (like FCH 61fb618).
-- `tools/rebuild_blocks_log.py` = wallet only, **no chain scan**.
+- `stratum/server.py` generates the adapted Stratum implementation during the image build/startup path.
+- The current adapter is pinned to the known-good FixedCoin/FreeCash Stratum base commit and carries the FixedCoin-specific coinbase, GBT, fixed-difficulty, and verified-submit patches.
+- `tools/rebuild_blocks_log.py` is wallet-only; it does not rewrite or delete chain history.
