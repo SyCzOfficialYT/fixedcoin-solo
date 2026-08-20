@@ -6,36 +6,28 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 FULL = HERE / "server_full.py"
 URL = "https://raw.githubusercontent.com/fixedcoin/freecash-coin/a88d89675b3a41cc6774e1b975e57e050d4892cc/stratum/server.py"
-ADAPT_VERSION = "fixedcoin-fch-dashboard-repair-2026-08-20-v11"
+ADAPT_VERSION = "fixedcoin-fch-dashboard-repair-2026-08-20-v12"
 
 
 def replace_function(source, name, replacement):
     tree = ast.parse(source)
-    target = next(
-        (n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name),
-        None,
-    )
+    target = next((n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name), None)
     if target is None:
         raise RuntimeError(f"function {name!r} not found in FreeCash base")
     lines = source.splitlines(keepends=True)
-    start = sum(map(len, lines[: target.lineno - 1]))
-    end = sum(map(len, lines[: target.end_lineno]))
+    start = sum(map(len, lines[:target.lineno - 1]))
+    end = sum(map(len, lines[:target.end_lineno]))
     return source[:start] + replacement.rstrip() + "\n" + source[end:]
 
 
 def adapt(t):
-    t = (
-        t.replace('job_interval", 20)', 'job_interval", 30)')
-        .replace('blog[-20:]', 'blog[-1000:]')
-        .replace('+ 14400', '+ 100')
-        .replace(' FCH', ' FIX')
-        .replace('FreeCash', 'FixedCoin')
-        .replace('/FCH-Solo/', '/FIX-Solo/')
-    )
+    t = (t.replace('job_interval", 20)', 'job_interval", 30)')
+         .replace('blog[-20:]', 'blog[-1000:]')
+         .replace('+ 14400', '+ 100')
+         .replace(' FCH', ' FIX')
+         .replace('FreeCash', 'FixedCoin')
+         .replace('/FCH-Solo/', '/FIX-Solo/'))
 
-    # FixedCoin accepts the BIP145-style GBT request and returns its own
-    # active rules (currently including !segwit). Do not send an empty or
-    # Bitcoin-specific rule set from the Stratum implementation.
     for old in (
         'rpc("getblocktemplate", [{"rules": []}]) or rpc("getblocktemplate", [])',
         'rpc("getblocktemplate", [{"rules": []}])',
@@ -47,14 +39,12 @@ def adapt(t):
     if 'rpc("getblocktemplate", [{"rules": ["segwit"]}])' not in t:
         raise RuntimeError("segwit GBT patch failed")
 
-    # Make RPC failures actionable instead of hiding the HTTP response body.
     rpc_func = '''def rpc(method, params=None):
     try:
         r = requests.post(
             f"http://{RPC_HOST}:{RPC_PORT}",
             json={"jsonrpc": "1.0", "id": "fch-stratum", "method": method, "params": params or []},
-            auth=HTTPBasicAuth(RPC_USER, RPC_PASS),
-            timeout=60,
+            auth=HTTPBasicAuth(RPC_USER, RPC_PASS), timeout=60,
         )
         try:
             data = r.json()
@@ -73,6 +63,54 @@ def adapt(t):
         return None
 '''
     t = replace_function(t, 'rpc', rpc_func)
+
+    submit_verified = '''def submitblock_verified(block_hex, expected_hash, expected_height):
+    """Submit a candidate and verify it is actually present in the node chain.
+
+    JSON-RPC submitblock returns null/empty on success, so the generic rpc()
+    helper cannot distinguish that from an RPC failure. Never emit BLOCK
+    ACCEPTED merely because the RPC wrapper returned None: query the node for
+    the exact candidate hash and require the expected height.
+    """
+    try:
+        r = requests.post(
+            f"http://{RPC_HOST}:{RPC_PORT}",
+            json={"jsonrpc": "1.0", "id": "submitblock", "method": "submitblock", "params": [block_hex]},
+            auth=HTTPBasicAuth(RPC_USER, RPC_PASS), timeout=120,
+        )
+        try:
+            data = r.json()
+        except Exception:
+            data = None
+        if r.status_code != 200:
+            detail = data.get("error") if isinstance(data, dict) else r.text[:500]
+            return False, f"HTTP {r.status_code}: {detail}"
+        if isinstance(data, dict) and data.get("error"):
+            return False, str(data["error"])
+        result = data.get("result") if isinstance(data, dict) else None
+        if result not in (None, ""):
+            return False, str(result)
+
+        # A successful submit must be observable in the node. This also
+        # protects against stale/side-chain candidates that are not the active tip.
+        for _ in range(10):
+            block = rpc("getblock", [expected_hash, 1])
+            if block and int(block.get("height", -1)) == int(expected_height):
+                return True, None
+            time.sleep(0.5)
+        return False, "submitblock returned success but candidate was not found at expected height"
+    except Exception as e:
+        return False, str(e)
+'''
+    if 'def submitblock_verified(' not in t:
+        t = t.replace('\ndef sha256d(', '\n' + submit_verified + '\ndef sha256d(', 1)
+
+    old_submit = 'res = rpc("submitblock", [binascii.hexlify(block).decode()])\n            if res in (None, ""):'
+    new_submit = 'accepted, submit_error = submitblock_verified(\n                binascii.hexlify(block).decode(), hhex, job["height"]\n            )\n            if accepted:'
+    if old_submit not in t:
+        raise RuntimeError('unsafe submitblock handling not found')
+    t = t.replace(old_submit, new_submit, 1)
+    t = t.replace('emit("ERROR", f"submitblock rejected: {res}")', 'emit("ERROR", f"submitblock rejected/unverified: {submit_error}")', 1)
 
     marker = 'MAX_DIFF = int(cfg["pool"].get("vardiff_max", 50_000_000))'
     if marker not in t:
@@ -125,16 +163,12 @@ def adapt(t):
             len(self.en1), self.en2_size,
         )'''
     newcall = '''build_coinbase_parts(
-            job["height"], job["value"], job["spk"], job.get("dev_spk"),
+            job["height"], job["value"], job.get("spk"), job.get("dev_spk"),
             len(self.en1), self.en2_size, job.get("witness_commitment"),
         )'''
     if oldcall in t:
         t = t.replace(oldcall, newcall, 1)
-    t = t.replace(
-        'build_coinbase_parts(job["height"], job["value"], job["spk"], job["dev_spk"]',
-        'build_coinbase_parts(job["height"], job["value"], job.get("spk"), job.get("dev_spk")',
-        1,
-    )
+    t = t.replace('build_coinbase_parts(job["height"], job["value"], job["spk"], job["dev_spk"]', 'build_coinbase_parts(job["height"], job["value"], job.get("spk"), job.get("dev_spk")', 1)
 
     witness = '''def coinbase_add_witness(tx_nowitness, enabled):
     if not enabled or len(tx_nowitness) < 8 or tx_nowitness[4:6] == b"\\x00\\x01":
@@ -156,7 +190,6 @@ def adapt(t):
         return binascii.unhexlify(info2["scriptPubKey"])
 '''
     t = t.replace(oldaddr, '')
-
     t = t.replace('"mature_at_height": job["height"] + 14400,', '"mature_at_height": job["height"] + 100,', 1)
     return t
 
@@ -168,6 +201,8 @@ def generate_server():
     ast.parse(adapted)
     assert 'rpc("getblocktemplate", [{"rules": ["segwit"]}])' in adapted
     assert 'rpc("getblocktemplate", [{"rules": []}])' not in adapted
+    assert 'submitblock_verified(' in adapted
+    assert 'if res in (None, ""):' not in adapted
     FULL.write_text(f"# ADAPT_VERSION={ADAPT_VERSION}\n" + adapted)
     print("Wrote", FULL, FULL.stat().st_size, flush=True)
 
