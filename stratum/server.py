@@ -6,7 +6,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 FULL = HERE / "server_full.py"
 URL = "https://raw.githubusercontent.com/fixedcoin/freecash-coin/a88d89675b3a41cc6774e1b975e57e050d4892cc/stratum/server.py"
-ADAPT_VERSION = "fixedcoin-fch-dashboard-repair-2026-08-20-v12"
+ADAPT_VERSION = "fixedcoin-fch-dashboard-repair-2026-08-20-v13-bip34"
 
 
 def replace_function(source, name, replacement):
@@ -64,6 +64,29 @@ def adapt(t):
 '''
     t = replace_function(t, 'rpc', rpc_func)
 
+    # FixedCoin follows Bitcoin-style BIP34: the block height is a minimally
+    # encoded CScriptNum pushed as the FIRST item of coinbase scriptSig.
+    # At height 32768+ the high bit of the final little-endian byte can be set;
+    # a sign-protection 00 byte is then mandatory. Height 44343 (0xAD37) is the
+    # exact boundary case that exposed the old implementation: 03 37 AD is
+    # interpreted as a negative script number and fixedcoind rejects the block
+    # with bad-cb-height. The correct encoding is 03 37 AD 00.
+    bip34 = '''def bip34_height(height):
+    n = int(height)
+    if n < 0:
+        raise ValueError("block height must be non-negative")
+    if n == 0:
+        payload = b""
+    else:
+        payload = n.to_bytes((n.bit_length() + 7) // 8, "little", signed=False)
+        if payload[-1] & 0x80:
+            payload += b"\\x00"
+    if len(payload) > 75:
+        raise ValueError("block height script number is too large")
+    return bytes([len(payload)]) + payload
+'''
+    t = replace_function(t, 'bip34_height', bip34)
+
     submit_verified = '''def submitblock_verified(block_hex, expected_hash, expected_height):
     """Submit a candidate and verify it is actually present in the node chain.
 
@@ -90,9 +113,6 @@ def adapt(t):
         result = data.get("result") if isinstance(data, dict) else None
         if result not in (None, ""):
             return False, str(result)
-
-        # A successful submit must be observable in the node. This also
-        # protects against stale/side-chain candidates that are not the active tip.
         for _ in range(10):
             block = rpc("getblock", [expected_hash, 1])
             if block and int(block.get("height", -1)) == int(expected_height):
@@ -203,6 +223,11 @@ def generate_server():
     assert 'rpc("getblocktemplate", [{"rules": []}])' not in adapted
     assert 'submitblock_verified(' in adapted
     assert 'if res in (None, ""):' not in adapted
+    assert 'def bip34_height(height):' in adapted
+    # Regression test for the exact height that produced bad-cb-height.
+    ns = {}
+    exec(compile(adapted, '<fixedcoin-stratum>', 'exec'), ns, ns)
+    assert ns['bip34_height'](44343) == b"\\x03\\x37\\xad\\x00"
     FULL.write_text(f"# ADAPT_VERSION={ADAPT_VERSION}\n" + adapted)
     print("Wrote", FULL, FULL.stat().st_size, flush=True)
 
