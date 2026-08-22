@@ -49,7 +49,7 @@ def patch() -> None:
 
     text = PATH.read_text()
 
-    difficulty_to_target = f'''def difficulty_to_target(diff):
+    difficulty_to_target = '''def difficulty_to_target(diff):
     """Convert FixedCoin Stratum share difficulty to a PoW target."""
     return int(FIXCOIN_POW_LIMIT / max(float(diff), 0.0001))
 '''
@@ -87,9 +87,11 @@ def patch() -> None:
         )
     text = text.replace(wrong, correct, 1)
 
-    # Make the constants explicit in generated source and fail loudly if a
-    # future generator changes the structure unexpectedly.
-    if "FIXCOIN_POW_LIMIT = " not in text:
+    # The consensus patch normally injects the powLimit already. If it is not
+    # present, add the constants directly after the adapter version marker.
+    if f"FIXCOIN_POW_LIMIT = {FIXCOIN_POW_LIMIT}" not in text:
+        if "FIXCOIN_POW_LIMIT = " in text:
+            raise RuntimeError("unexpected FixedCoin powLimit value in generated adapter")
         marker = "# ADAPT_VERSION="
         line_end = text.find("\n", text.find(marker))
         if line_end < 0:
@@ -100,26 +102,21 @@ def patch() -> None:
             + f"DIFF1_TARGET = {DIFF1_TARGET}\n"
             + text[line_end:]
         )
-    else:
-        # The consensus patch already injects the constant. Add DIFF1_TARGET
-        # next to it if this generated revision does not have it yet.
-        if "DIFF1_TARGET = " not in text:
-            marker = f"FIXCOIN_POW_LIMIT = {FIXCOIN_POW_LIMIT}"
-            if marker not in text:
-                raise RuntimeError("unexpected FixedCoin powLimit value")
-            text = text.replace(
-                marker,
-                marker + f"\nDIFF1_TARGET = {DIFF1_TARGET}",
-                1,
-            )
+    elif "DIFF1_TARGET = " not in text:
+        marker = f"FIXCOIN_POW_LIMIT = {FIXCOIN_POW_LIMIT}"
+        text = text.replace(
+            marker,
+            marker + f"\nDIFF1_TARGET = {DIFF1_TARGET}",
+            1,
+        )
 
     ast.parse(text)
     PATH.write_text(text)
 
 
 def verify() -> None:
-    ns = {}
     source = PATH.read_text()
+    ns = {}
     exec(compile(source, str(PATH), "exec"), ns, ns)
 
     assert ns["FIXCOIN_POW_LIMIT"] == FIXCOIN_POW_LIMIT
@@ -139,11 +136,11 @@ def verify() -> None:
     if abs(reference - 44715709.803317755) > 0.01:
         raise RuntimeError(f"network difficulty regression failed: {reference}")
 
-    text = source
-    assert f"return int(FIXCOIN_POW_LIMIT / max(float(diff), 0.0001))" in text
-    assert "return FIXCOIN_POW_LIMIT / target" in text
-    assert "net_diff = canonical_difficulty(nbits)" in text
-    assert "net_diff = target_to_difficulty(bits_to_target(nbits))" not in text
+    assert f"FIXCOIN_POW_LIMIT = {FIXCOIN_POW_LIMIT}" in source
+    assert "return int(FIXCOIN_POW_LIMIT / max(float(diff), 0.0001))" in source
+    assert "return FIXCOIN_POW_LIMIT / target" in source
+    assert "net_diff = canonical_difficulty(nbits)" in source
+    assert "net_diff = target_to_difficulty(bits_to_target(nbits))" not in source
 
 
 if __name__ == "__main__":
