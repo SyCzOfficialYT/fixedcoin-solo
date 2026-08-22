@@ -60,7 +60,12 @@ for line in s.splitlines():
 p.write_text(s)
 print('GBT verification: all getblocktemplate calls use segwit rules')
 PY
-RUN python3 -m py_compile /app/monitor/app.py /app/stratum/server.py /app/stratum/server_full.py
+
+# Generated Stratum must use FixedCoin powLimit for share difficulty while
+# retaining Core's Bitcoin-compatible Diff1 scale for network difficulty.
+RUN python3 /app/scripts/fixcoin_stratum_difficulty_patch.py
+
+RUN python3 -m py_compile /app/monitor/app.py /app/stratum/server.py /app/stratum/server_full.py /app/scripts/fixcoin_stratum_difficulty_patch.py
 RUN chmod +x /app/docker/entrypoint.sh
 
 ENV FIX_DATADIR=/data/fixedcoin
