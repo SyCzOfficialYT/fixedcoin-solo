@@ -120,6 +120,18 @@ else
 fi
 
 python3 /app/scripts/setup_address.py 2>/dev/null || echo "[allinone] address setup skip/later"
+
+# The Stratum adapter is generated from an upstream base at build/runtime.
+# Always apply the deterministic FixedCoin difficulty patch immediately before
+# starting it, so a regenerated adapter cannot silently reintroduce the wrong
+# Bitcoin Diff1 share-work formula.
+if python3 /app/scripts/fixcoin_stratum_difficulty_patch.py; then
+    echo "[allinone] Stratum difficulty verification PASS"
+else
+    echo "[allinone] FATAL: Stratum difficulty verification failed"
+    exit 1
+fi
+
 run_forever stratum /app/data/stratum.log python3 /app/stratum/server.py &
 STRATUM_SUPERVISOR_PID=$!
 
